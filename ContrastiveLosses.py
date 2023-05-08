@@ -13,11 +13,12 @@ def gumbel_max(logits, K):
 
 
 
-def CentroidSS(y_pred):
+def CentroidSS(anchors, positives     ):
     # This loss should have only 2D output, and no L2 normalization on the output.
     # Input shape of y_pred here is [2* batch size, dimension of embedding (most cases = 2)]
 
-    z = y_pred
+    assert len(anchors) == len(positives), f"The number of positive samples need to be the same as the number of " \
+                                           f"anchors, now they have shapes {anchors.shape} vs {positives.shape} "
 
     # Want to have "regular" n-pair loss, but instead of computing vectors from the origin, compute
     # them with respect to some other point. We talked first about doing this with respect to the
@@ -26,11 +27,9 @@ def CentroidSS(y_pred):
     # Carl had an idea to use different centroids for each considered negative for each sample.
     # The centroid would then sort of be "(A+P+2*N)/4", weighting N twice since most likely A and P will lie close.
 
-    size = tf.shape(z)[0]
+    n = tf.shape(anchors)[0] # Number of samples in the current batch.
 
-    n = tf.cast(tf.shape(z)[0] / 2, tf.int32)
-
-    if tf.shape(z)[0] == 0:  # To not have to handle empty batches which may come up in distributed training.
+    if tf.shape(anchors)[0] == 0:  # To not have to handle empty batches which may come up in distributed training.
         return 0.
 
     N_pairs = n - 1  # This means take as many as possible, There has been some issues when last batch smaller than N_pairs,
@@ -44,8 +43,8 @@ def CentroidSS(y_pred):
     # In the regular case, we would need to compute only one dot product for the positive samples, now
     # we need to do it N times for each sample.
 
-    A = z[0:size // 2, :]  # Anchors
-    P = z[size // 2:, :]  # Positives
+    A = anchors # z[0:size // 2, :]  # Anchors
+    P = positives # z[size // 2:, :]  # Positives
 
     A_full = tf.tile(A[:, tf.newaxis, :], [1, N_pairs, 1])
     P_full = tf.tile(P[:, tf.newaxis, :], [1, N_pairs, 1])
@@ -111,29 +110,23 @@ def CentroidSS(y_pred):
     loss = 1 / tf.cast(n, tf.float32) * tf.reduce_sum(tf.math.log(
         1 + tf.reduce_sum(-tf.math.exp(-2.) + tf.math.exp(num - m) / (tf.math.exp(denom - m) + eps), axis=1)))
 
-    # tf.print(loss)
 
     return loss
 
 
-def Triplet(y_pred):
+def Triplet(anchors, positives, alpha = 1):
 
     # This is just basic triplet loss
 
-    z = y_pred#/ tf.reduce_max(y_pred, axis = 0)#/40 # Normalize?
-    size = tf.shape(z)[0]
-
-
     # Try to choose the closest one in the batch as the negative?
-    anchors = z[0:size // 2, :]
-    positives = z[size // 2:, :]
-    negatives = z[1:size//2+1,:]
+    #anchors = z[0:size // 2, :]
+    #positives = z[size // 2:, :]
+
+    # Taking the negative as some other sample in the batch
+    negatives = tf.concat([anchors[1:,:], anchors[0,tf.newaxis,:]], axis = 0)
+
 
     distances = tf.sqrt(tf.reduce_sum((anchors[:,:,tf.newaxis] - tf.transpose(anchors[:,:,tf.newaxis]))**2,axis = 1))
-
-
-
-    #tf.print(distances)
 
     argsorted_indices = tf.argsort(distances, axis = 0, direction="ASCENDING")
     #argsorted_indices[1, :]
@@ -147,15 +140,16 @@ def Triplet(y_pred):
     #	pass
     #tf.print(tf.shape(tf.gather( anchors,argsorted_indices[5,:])))
 
+    # L2-distance
+    anchor_pos = tf.reduce_sum( (anchors - positives) **2, axis = 1)
+    anchor_neg = tf.reduce_sum( (anchors - negatives) **2 , axis = 1)
 
-    #anchor_pos = tf.reduce_sum( (anchors - positives) **2, axis = 1)
-    #anchor_neg = tf.reduce_sum( (anchors - negatives) **2 , axis = 1)
-
-    anchor_pos = tf.reduce_sum( tf.math.abs(anchors - positives) , axis = 1)
-    anchor_neg = tf.reduce_sum(  tf.math.abs(anchors - negatives) , axis = 1)
+    # L1-distance
+    #anchor_pos = tf.reduce_sum( tf.math.abs(anchors - positives) , axis = 1)
+    #anchor_neg = tf.reduce_sum(  tf.math.abs(anchors - negatives) , axis = 1)
 
 
-    alpha = 1
+
 
     return tf.reduce_sum(tf.math.maximum( anchor_pos - anchor_neg+ alpha, 0 ) )
 

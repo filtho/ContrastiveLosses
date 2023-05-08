@@ -11,7 +11,7 @@ Build the Apptainer image:
 
 `$ sudo apptainer build  image.sif image.def`
 
-Run the image: 
+Run the image, the --nv flag exposes the NVIDIA GPU to the container: 
 
 `$ apptainer run --nv image.sif`
 
