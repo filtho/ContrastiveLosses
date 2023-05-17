@@ -83,7 +83,7 @@ def CentroidSS(anchors, positives     ):
 
     max_vec = tf.tile(tf.reduce_max(tf.stack(
         [tf.reduce_sum(AC ** 2, axis=-1), tf.reduce_sum(NC ** 2, axis=-1), tf.reduce_sum(PC ** 2, axis=-1)], axis=-1),
-        axis=-1)[:, :, tf.newaxis], [1, 1, tf.shape(z)[1]])
+        axis=-1)[:, :, tf.newaxis], [1, 1, tf.shape(anchors)[1]])
 
     # max_vec =  tf.tile(tf.reduce_mean(tf.stack(
     #	[tf.reduce_sum(AC ** 2, axis=-1), tf.reduce_sum(NC ** 2, axis=-1), tf.reduce_sum(PC ** 2, axis=-1)], axis=-1), axis=-1)[:, :, tf.newaxis], [1, 1, tf.shape(z)[1]])
