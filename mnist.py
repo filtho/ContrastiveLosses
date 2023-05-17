@@ -1,4 +1,3 @@
-
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -8,7 +7,9 @@ from sklearn.decomposition import PCA
 import ContrastiveLosses as CL
 import time
 
+
 sns.set()
+
 
 (train_images, train_labels), (test_images, test_labels) = tf.keras.datasets.mnist.load_data()
 
@@ -158,10 +159,12 @@ def run_optimization(model, optimizer, loss_function, input ):
 
 
 
-loss_func = CL.Triplet
+#loss_func = CL.Triplet
+
+loss_func = CL.CentroidSS
 
 schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
-    initial_learning_rate =  0.000001, #for triplet, 0.1 for scaled centroid
+    initial_learning_rate =  0.1, # 0.000001, #for triplet, 0.1 for scaled centroid
     first_decay_steps = 3e4,
     t_mul=1,
     m_mul=.95,
@@ -176,7 +179,7 @@ optimizer = tf.optimizers.SGD(learning_rate=schedule, momentum=0.9,nesterov=True
 
 # Load the weights of a previous run:
 
-#encoder.load_weights('./Examples/triplet/saved_model/epoch_900')
+encoder.load_weights('./Examples/fulldataset_trained400epochs,200b,20closest/saved_model/epoch_300')
 print(encoder.model.summary())
 
 
@@ -196,7 +199,7 @@ epoch_vec = []
 for e in range(epochs):
 
     if e%1 == 0 :
-        samples_to_plot = 5000
+        samples_to_plot = 2000
 
         emb = encoder(tf.keras.layers.ZeroPadding2D(padding=2)(train_images[:samples_to_plot, :]), training = False)
         #emb = encoder(train_images[:samples_to_plot, :])

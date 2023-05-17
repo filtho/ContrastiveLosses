@@ -48,6 +48,6 @@ The code yields the following results:
 
 
 ![Results on Fashion-MNIST](example_figures/fashion_mnist_example.png)
+
 #### CIFAR10 (to be implemented)
 
-#### Genetic data (to be implemented)
