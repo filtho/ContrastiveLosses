@@ -9,19 +9,17 @@ Options:
 
 
 """
-from docopt import docopt
+from docopt import docopt, DocoptExit
 import numpy as np
 import tensorflow as tf
 import os
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import seaborn as sns
-from docopt import docopt, DocoptExit
 from sklearn.decomposition import PCA
 import ContrastiveLosses as CL
 import time
 import pandas as pd
-from sklearn.decomposition import PCA
 from sklearn.neighbors import KNeighborsClassifier
 sns.set()
 
@@ -43,7 +41,7 @@ if __name__ == '__main__':
         channels = 1
         plot_labels = ["0","1","2","3","4","5","6","7","8","9"]
 
-    if arguments["--data"]=="fashion_mnist":
+    elif arguments["--data"]=="fashion_mnist":
         (train_images, train_labels), (test_images, test_labels) = tf.keras.datasets.fashion_mnist.load_data()
         dataset = "fashion_mnist"
         data_size = 28
@@ -59,12 +57,13 @@ if __name__ == '__main__':
         plot_labels  = ["airplane", "automobile","bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"]
 
     else:
-        print("Not implemented for dataset {}".format())
+        print("Not implemented for dataset {}".format(arguments["--data"]))
 
     def preprocess_images(images):
-      images = images.reshape((images.shape[0], data_size, data_size, channels)) / 255.
-      return images # np.where(images > .5, 1.0, 0.0).astype('float32')
-    if dataset=="mnist" or "fashion_mnist":
+        images_processed = images.reshape((images.shape[0], data_size, data_size, channels)) / 255.
+        return images_processed # np.where(images > .5, 1.0, 0.0).astype('float32')
+
+    if dataset=="mnist" or dataset=="fashion_mnist":
         train_images = preprocess_images(train_images)
         test_images = preprocess_images(test_images)
         mu_train = 0#np.mean(train_images)
@@ -78,6 +77,7 @@ if __name__ == '__main__':
         train_images = (train_images - mu_train)/std_train
 
         test_images =( (test_images)/255).astype('float32')
+
         mu_test = np.mean(test_images)
         std_test = np.std(test_images)
         test_images = (test_images - mu_test)/std_test
@@ -109,6 +109,7 @@ if __name__ == '__main__':
         return tf.keras.layers.Activation("relu")(x)
 
     def S1_B1(x):
+        """ A short implementation for """
         y = tf.keras.layers.Conv2D(filters=64, kernel_size=1, strides=(1, 1), padding="same")(x)
         y = tf.keras.layers.BatchNormalization()(y)
         y = tf.keras.layers.Activation("relu")(y)
@@ -200,7 +201,7 @@ if __name__ == '__main__':
             name=None
         )"""
         schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
-            initial_learning_rate =   0.01, # 0.000001, #for triplet, 0.1 for scaled centroid on mnist
+            initial_learning_rate =   0.1, # 0.000001, #for triplet, 0.1 for scaled centroid on mnist
             first_decay_steps = 1e5,
             t_mul=1,
             m_mul=.95,
@@ -216,7 +217,7 @@ if __name__ == '__main__':
         print(encoder.model.summary())
 
 
-        if dataset =="mnist" or "fashion_mnist":
+        if dataset =="mnist" or dataset=="fashion_mnist":
             rot = tf.keras.layers.RandomRotation(factor = 0.1, interpolation = 'bilinear', fill_mode = "constant", fill_value = 0.0, )
             shift =tf.keras.layers.RandomTranslation(0.2,0.2,fill_mode='constant',fill_value = 0)
             zoom = tf.keras.layers.RandomZoom(height_factor = [0.,0.7],width_factor=[0.,0.7],fill_mode='constant',interpolation='bilinear',seed=None,fill_value=0.0,)
@@ -232,15 +233,16 @@ if __name__ == '__main__':
 
         epochs =    1000
         batch_size = 200
-        num_samples = train_images.shape[0]
+        num_samples =  train_images.shape[0]
         loss = []
         times = []
         epoch_vec = []
         for e in range(epochs):
+            t = time.perf_counter()
             if e%1 == 0 :
                 samples_to_plot = 5000
 
-                if dataset=="mnist" or "fashion_mnist":
+                if dataset=="mnist" or dataset=="fashion_mnist":
                     emb = encoder(tf.keras.layers.ZeroPadding2D(padding=2)(train_images[:samples_to_plot, :]), training = False)
                 elif dataset =="cifar10":
                     emb = encoder(train_images[:samples_to_plot, :])
@@ -276,7 +278,7 @@ if __name__ == '__main__':
 
                 # Augmentation:
 
-                if dataset =="mnist" or "fashion_mnist":
+                if dataset =="mnist" or dataset=="fashion_mnist":
                     input = train_images2[current_batch:current_batch+batch_size,:]
                     input = shift(rot(zoom(tf.concat([input,input], axis = 0))))
 
@@ -300,7 +302,7 @@ if __name__ == '__main__':
                     plt.imshow(input[0]*std_train + mu_train, cmap="gray")
                     plt.subplot(224)
                     plt.imshow(input[batch_size]*std_train + mu_train, cmap="gray")
-                    if dataset=="mnist" or "fashion_mnist":
+                    if dataset=="mnist" or dataset=="fashion_mnist":
                         emb2 = encoder(tf.keras.layers.ZeroPadding2D(padding=2)(input))
                     elif dataset == "cifar10":
                         emb2 = encoder(input)
@@ -316,7 +318,7 @@ if __name__ == '__main__':
                     plt.savefig(save_dir+"augmentation.pdf")
 
                     plt.close()
-                if dataset == "mnist" or "fashion_mnist":
+                if dataset == "mnist" or dataset=="fashion_mnist":
                     input = tf.keras.layers.ZeroPadding2D(padding=2)(input)
                 elif dataset == "cifar10":
 
@@ -326,7 +328,7 @@ if __name__ == '__main__':
                 current_batch +=batch_size
 
 
-            print("Epoch {}, loss:  {}, learning rate: {} ".format(e, a/num_samples, optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
+            print("Epoch {}, loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
 
             if e % 100 ==0:
                 print("saving model at epoch {}".format(e))
@@ -386,7 +388,7 @@ if __name__ == '__main__':
 
             full_emb = np.empty((0, 2))
             for ii in range(num_batches):
-                if dataset=="mnist" or "fashion_mnist":
+                if dataset=="mnist" or dataset=="fashion_mnist":
                     emb = encoder(tf.keras.layers.ZeroPadding2D(padding=2)(images[batch_size * ii:batch_size * (ii + 1), :]),
                               training=False)
                 elif dataset =="cifar10":
