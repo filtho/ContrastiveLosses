@@ -9,18 +9,19 @@ Options:
 
 
 """
+import os
+import time
 from docopt import docopt, DocoptExit
 import numpy as np
 import tensorflow as tf
-import os
 import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
 import seaborn as sns
-from sklearn.decomposition import PCA
-import ContrastiveLosses as CL
-import time
 import pandas as pd
+from sklearn.manifold import TSNE
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.decomposition  import PCA
+import ContrastiveLosses as CL
+
 sns.set()
 
 if __name__ == '__main__':
@@ -57,11 +58,16 @@ if __name__ == '__main__':
         plot_labels  = ["airplane", "automobile","bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"]
 
     else:
-        print("Not implemented for dataset {}".format(arguments["--data"]))
+        print(f"Not implemented for dataset {arguments['--data']}")
 
-    def preprocess_images(images):
-        images_processed = images.reshape((images.shape[0], data_size, data_size, channels)) / 255.
+
+    def preprocess_images(img):
+
+        """ Basic preprocessing of MNIST images. """
+
+        images_processed = img.reshape((img.shape[0], data_size, data_size, channels)) / 255.
         return images_processed # np.where(images > .5, 1.0, 0.0).astype('float32')
+
 
     if dataset=="mnist" or dataset=="fashion_mnist":
         train_images = preprocess_images(train_images)
@@ -92,56 +98,22 @@ if __name__ == '__main__':
     marker_list = ["$0$", "$1$", "$2$","$3$", "$4$","$5$","$6$","$7$","$8$","$9$"]
     color_list  = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'black', 'white', 'gray', 'pink']
 
-    def S1_B2(x):
-        y = tf.keras.layers.Conv2D(filters=64, kernel_size=1, strides=(1, 1), padding="same")(x)
-        y = tf.keras.layers.BatchNormalization()(y)
-        y = tf.keras.layers.Activation("relu")(y)
-
-        y = tf.keras.layers.Conv2D(filters=64, kernel_size=3, strides=(1, 1), padding="same")(y)
-        y = tf.keras.layers.BatchNormalization()(y)
-        y = tf.keras.layers.Activation("relu")(y)
-
-        y = tf.keras.layers.Conv2D(filters=256, kernel_size=1, strides=(1, 1), padding="same")(y)
-        y = tf.keras.layers.BatchNormalization()(y)
-
-
-        x = tf.keras.layers.Add()([x, y])
-        return tf.keras.layers.Activation("relu")(x)
-
-    def S1_B1(x):
-        """ A short implementation for """
-        y = tf.keras.layers.Conv2D(filters=64, kernel_size=1, strides=(1, 1), padding="same")(x)
-        y = tf.keras.layers.BatchNormalization()(y)
-        y = tf.keras.layers.Activation("relu")(y)
-
-        y = tf.keras.layers.Conv2D(filters=64, kernel_size=3, strides=(1, 1), padding="same")(y)
-        y = tf.keras.layers.BatchNormalization()(y)
-        y = tf.keras.layers.Activation("relu")(y)
-
-        y = tf.keras.layers.Conv2D(filters=256, kernel_size=1, strides=(1, 1), padding="same")(y)
-        y = tf.keras.layers.BatchNormalization()(y)
-
-        x = tf.keras.layers.Conv2D(filters=256, kernel_size=1, strides=(1, 1), padding="same")(x)
-        x = tf.keras.layers.BatchNormalization()(x)
-
-        x = tf.keras.layers.Add()([x, y])
-        return tf.keras.layers.Activation("relu")(x)
     class Encoder(tf.keras.Model):
-
+        """ A class defining the model architecture, and the call logic."""
 
         def __init__(self, latent_dim):
             super(Encoder, self).__init__()
             self.latent_dim = latent_dim
 
-            inputs = tf.keras.Input(shape=(32, 32, channels))
+            inputs = tf.keras.Input(shape=(data_size, data_size, channels))
             x = tf.keras.layers.Conv2D(filters=32, kernel_size=3, strides=(2, 2), padding="same")(inputs)
             x = tf.keras.layers.Conv2D(filters=32, kernel_size=3, strides=(1, 1), padding="same")(x)
             x = tf.keras.layers.Conv2D(filters=64, kernel_size=3, strides=(1, 1), padding="same")(x)
             x = tf.keras.layers.MaxPool2D(pool_size=(3, 3), strides=2)(x)
 
-            x = S1_B1(x)
-            x = S1_B2(x)
-            x = S1_B2(x)
+            x = self.S1_B1(x)
+            x = self.S1_B2(x)
+            x = self.S1_B2(x)
 
             x = tf.keras.layers.Flatten()(x)
             x = tf.keras.layers.Dense(75, activation="relu")(x)
@@ -155,51 +127,78 @@ if __name__ == '__main__':
             outputs = tf.keras.layers.GaussianNoise(stddev=4.66)(outputs)
             self.model = tf.keras.Model(inputs=inputs, outputs=outputs, name="Model")
 
-        def call(self, input):
-            encoding = self.model(input)
+        def call(self, inputs):
+            encoding = self.model(inputs)
             reg_loss = 1e-7 * tf.reduce_sum(tf.math.maximum(0., tf.square(encoding) - 1 * 40000.))
 
             self.add_loss(reg_loss)
 
-            return self.model(input)
+            return self.model(inputs)
+
+        def S1_B2(self,x):
+            """ A short implementation for a residual block"""
+            y = tf.keras.layers.Conv2D(filters=64, kernel_size=1, strides=(1, 1), padding="same")(x)
+            y = tf.keras.layers.BatchNormalization()(y)
+            y = tf.keras.layers.Activation("relu")(y)
+
+            y = tf.keras.layers.Conv2D(filters=64, kernel_size=3, strides=(1, 1), padding="same")(y)
+            y = tf.keras.layers.BatchNormalization()(y)
+            y = tf.keras.layers.Activation("relu")(y)
+
+            y = tf.keras.layers.Conv2D(filters=256, kernel_size=1, strides=(1, 1), padding="same")(y)
+            y = tf.keras.layers.BatchNormalization()(y)
 
 
+            x = tf.keras.layers.Add()([x, y])
+            return tf.keras.layers.Activation("relu")(x)
+
+        def S1_B1(self,x):
+            """ A short implementation for a "introductory" residual block """
+            y = tf.keras.layers.Conv2D(filters=64, kernel_size=1, strides=(1, 1), padding="same")(x)
+            y = tf.keras.layers.BatchNormalization()(y)
+            y = tf.keras.layers.Activation("relu")(y)
+
+            y = tf.keras.layers.Conv2D(filters=64, kernel_size=3, strides=(1, 1), padding="same")(y)
+            y = tf.keras.layers.BatchNormalization()(y)
+            y = tf.keras.layers.Activation("relu")(y)
+
+            y = tf.keras.layers.Conv2D(filters=256, kernel_size=1, strides=(1, 1), padding="same")(y)
+            y = tf.keras.layers.BatchNormalization()(y)
+
+            x = tf.keras.layers.Conv2D(filters=256, kernel_size=1, strides=(1, 1), padding="same")(x)
+            x = tf.keras.layers.BatchNormalization()(x)
+
+            x = tf.keras.layers.Add()([x, y])
+            return tf.keras.layers.Activation("relu")(x)
     encoder = Encoder(2)
 
     if arguments["train"]:
-        def run_optimization(model, optimizer, loss_function, input):
+        def run_optimization(model, opt, loss_function, inputs):
             '''
             Run one step of optimization process based on the given data.
 
 
             :param model: a tf.keras.Model
-            :param optimizer: a tf.keras.optimizers
+            :param opt: a tf.keras.optimizers
             :param loss_function: a loss function
-            :param input: input data
+            :param inputs: input data
             :param targets: target data
             :return: value of the loss function
             '''
 
             with tf.GradientTape() as g:
-                output = model(input, training= True)
+                output = model(inputs, training= True)
                 loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = output[tf.shape(output)[0] // 2:, :])
                 loss_value += tf.nn.scale_regularization_loss(tf.reduce_sum(model.losses))
             gradients = g.gradient(loss_value, model.trainable_variables)
 
-            optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+            opt.apply_gradients(zip(gradients, model.trainable_variables))
             return loss_value
 
         #loss_func = CL.Triplet
         loss_func = CL.CentroidSS
-        """
-        schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
-            initial_learning_rate =   0.01, # 0.000001, #for triplet, 0.1 for scaled centroid on mnist
-            first_decay_steps = 3e4,
-            t_mul=1,
-            m_mul=.95,
-            alpha=1e-5,
-            name=None
-        )"""
+       
+
         schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
             initial_learning_rate =   0.1, # 0.000001, #for triplet, 0.1 for scaled centroid on mnist
             first_decay_steps = 1e5,
@@ -230,6 +229,7 @@ if __name__ == '__main__':
                                               interpolation='bilinear', seed=None, fill_value=0.0, )
             contrast = tf.keras.layers.RandomContrast(factor=0.4)
             flip = tf.keras.layers.RandomFlip(mode="horizontal")
+            brightness = tf.keras.layers.RandomBrightness(factor = 0.0, value_range = (0,1))
 
         epochs =    1000
         batch_size = 200
@@ -237,29 +237,45 @@ if __name__ == '__main__':
         loss = []
         times = []
         epoch_vec = []
+
+
+
+        def mnist_augmentation(image,label):
+            image =  tf.concat([image,image], axis  = 0)
+            return  shift(rot(zoom(image))), label
+
+        def cifar_augmentation(image,label):
+            image = tf.concat([tf.image.random_hue(flip((image)), 0.05),tf.image.random_hue(flip((image)), 0.05)], axis  = 0)
+            return  rot(image), label
+
+        ds = tf.data.Dataset.from_tensor_slices((train_images, train_labels))
+        ds = ds.shuffle(train_images.shape[0], reshuffle_each_iteration = True)
+        ds = ds.prefetch(tf.data.AUTOTUNE)
+        ds = ds.batch(batch_size)
+
+        if dataset=="mnist" or dataset=="fashion_mnist":
+
+            ds = ds.map(mnist_augmentation)
+        elif dataset =="cifar10":
+            ds = ds.map(cifar_augmentation)
+
+
         for e in range(epochs):
             t = time.perf_counter()
             if e%1 == 0 :
-                samples_to_plot = 5000
+                samples_to_plot = 2000
 
                 if dataset=="mnist" or dataset=="fashion_mnist":
-                    emb = encoder(tf.keras.layers.ZeroPadding2D(padding=2)(train_images[:samples_to_plot, :]), training = False)
+                    emb = encoder(train_images[:samples_to_plot, :], training = False)
                 elif dataset =="cifar10":
-                    emb = encoder(train_images[:samples_to_plot, :])
+                    emb = encoder(train_images[:samples_to_plot, :], training = False)
 
 
                 plt.figure()
                 ax = plt.gca()
-                """
-                for i in range(10):
-                    inds = np.where(train_labels[:samples_to_plot] == i)[0]
-                    marker = "$" + str(i) + "$"
-                    ax.scatter(emb.numpy()[inds, 0], emb.numpy()[inds, 1],  marker=marker_list[i], color=color_list[i] ) # ,s = 120,  edgecolor='black',linewidth=0.00)
-                """
 
                 D = pd.DataFrame({"x": emb[:, 0], "y": emb[:, 1], "label": tf.gather(plot_labels, tf.cast(train_labels[:samples_to_plot], tf.int32)).numpy().astype(str)})
-                sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"),
-                                legend="brief",hue_order = plot_labels)  # ,# = emb.numpy()[:, 0], y = emb.numpy()[:, 1], hue = np.array(color_list)[train_labels[samples_to_plot*ii:samples_to_plot*(ii+1)]], legend='brief')
+                sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"), legend="brief",hue_order = plot_labels)  
 
                 plt.title("Epoch: {}".format(e))
                 plt.legend(fontsize='x-small', title_fontsize='40')
@@ -267,45 +283,23 @@ if __name__ == '__main__':
                 plt.savefig(save_dir+"Epoch: {}.pdf".format(e))
                 plt.close()
 
-
-
             t0 = time.perf_counter()
             current_batch = 0
             a = 0
             train_images2 = tf.random.shuffle(train_images[:num_samples, :])
 
-            while current_batch < num_samples:
-
-                # Augmentation:
-
-                if dataset =="mnist" or dataset=="fashion_mnist":
-                    input = train_images2[current_batch:current_batch+batch_size,:]
-                    input = shift(rot(zoom(tf.concat([input,input], axis = 0))))
-
-                elif dataset =="cifar10":
-                    input = train_images2[current_batch:current_batch + batch_size, :]
-                    #input = tf.concat([input,input], axis = 0)
-                    input = tf.concat([tf.image.random_hue(flip((input)), 0.05), tf.image.random_hue(flip((input)), 0.05)],axis=0)
-
-                    input = rot(shift(zoom(input)))
-
-                    #noise = tf.math.abs(tf.random.normal(tf.shape(input), mean = 0, stddev =0.3 ))
-                    input = input  #+ tf.cast((noise>0.5),tf.float32)* tf.clip_by_value(noise,1,1)
-
-
-
-                    input = tf.clip_by_value(input, tf.reduce_min(input),tf.reduce_max(input))
-
+            for i, j in ds:
+                current_batch += batch_size
+                input_data = i
+              
                 if current_batch%(batch_size*10) == 0: # Save image of augmented samples and where they get mapped, used in development - checking augmentations.
                     plt.figure()
                     plt.subplot(223)
-                    plt.imshow(input[0]*std_train + mu_train, cmap="gray")
+                    plt.imshow(input_data[0]*std_train + mu_train, cmap="gray")
                     plt.subplot(224)
-                    plt.imshow(input[batch_size]*std_train + mu_train, cmap="gray")
-                    if dataset=="mnist" or dataset=="fashion_mnist":
-                        emb2 = encoder(tf.keras.layers.ZeroPadding2D(padding=2)(input))
-                    elif dataset == "cifar10":
-                        emb2 = encoder(input)
+                    plt.imshow(input_data[batch_size]*std_train + mu_train, cmap="gray")
+
+                    emb2 = encoder(input_data)
 
                     plt.subplot(211)
                     plt.scatter(emb2.numpy()[:, 0], emb2.numpy()[:, 1], color = 'k')
@@ -318,15 +312,9 @@ if __name__ == '__main__':
                     plt.savefig(save_dir+"augmentation.pdf")
 
                     plt.close()
-                if dataset == "mnist" or dataset=="fashion_mnist":
-                    input = tf.keras.layers.ZeroPadding2D(padding=2)(input)
-                elif dataset == "cifar10":
 
-                    input = input
 
-                a += run_optimization(encoder, optimizer, loss_func, input)
-                current_batch +=batch_size
-
+                a += run_optimization(encoder, optimizer, loss_func, input_data)
 
             print("Epoch {}, loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
 
@@ -356,27 +344,8 @@ if __name__ == '__main__':
 
             batch_size = 1000
             num_samples = train_images.shape[0]
-            # samples_to_plot*i:samples_to_plot*(i+1)
             num_batches = num_samples // batch_size
             full_emb = np.empty((0, 2))
-
-            """ This plots with the numbers as markers, can get pretty messy.
-            plt.figure()
-            for ii in range(num_batches):
-                emb = encoder(tf.keras.layers.ZeroPadding2D(padding=2)(train_images[samples_to_plot*ii:samples_to_plot*(ii+1), :]), training=False)
-                full_emb = np.append(full_emb, emb, axis = 0)
-                ax = plt.gca()
-                for i in range(10):
-                    inds = np.where(train_labels[samples_to_plot*ii:samples_to_plot*(ii+1)] == i)[0]
-                    marker = "$" + str(i) + "$"
-                    ax.scatter(emb.numpy()[inds, 0], emb.numpy()[inds, 1], marker=marker_list[i],
-                               color=color_list[i])#, s = 120,  edgecolor='black',linewidth=0.02)
-            plt.title("CentroidSS on MNIST:")
-            plt.savefig("mnist_example.pdf")
-            plt.close()
-            plt.figure()
-    
-            """
 
             plot_train = True
             if plot_train:
@@ -388,18 +357,11 @@ if __name__ == '__main__':
 
             full_emb = np.empty((0, 2))
             for ii in range(num_batches):
-                if dataset=="mnist" or dataset=="fashion_mnist":
-                    emb = encoder(tf.keras.layers.ZeroPadding2D(padding=2)(images[batch_size * ii:batch_size * (ii + 1), :]),
-                              training=False)
-                elif dataset =="cifar10":
-                    emb = encoder(images[batch_size * ii:batch_size * (ii + 1), :], training=False)
+
+                emb = encoder(images[batch_size * ii:batch_size * (ii + 1), :], training=False)
                 full_emb = np.append(full_emb, emb, axis=0)
 
-            """
-            D = pd.DataFrame({"x": full_emb[:, 0], "y": full_emb[:, 1], "color": labels})
-            sns.scatterplot(data=D, x="x", y="y", hue="color", palette=sns.color_palette("tab10"),
-                            legend="brief")  # ,# = emb.numpy()[:, 0], y = emb.numpy()[:, 1], hue = np.array(color_list)[train_labels[samples_to_plot*ii:samples_to_plot*(ii+1)]], legend='brief')
-            """
+
             D = pd.DataFrame({"x": full_emb[:, 0], "y": full_emb[:, 1], "label": tf.gather(plot_labels,
                                                                                  tf.cast(labels,
                                                                                          tf.int32)).numpy().astype(
@@ -447,3 +409,4 @@ if __name__ == '__main__':
         D = pd.DataFrame({"x": X_embedded[:, 0], "y": X_embedded[:, 1], "color": train_labels})
         sns.scatterplot(data=D, x="x", y="y", hue="color", palette=sns.color_palette("tab10"), legend="brief")
         plt.savefig(save_dir+"tsne.pdf")
+        
