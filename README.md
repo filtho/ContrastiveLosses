@@ -15,6 +15,11 @@ Run the image, the --nv flag exposes the NVIDIA GPU to the container:
 
 `$ apptainer run --nv image.sif`
 
+### Virtual environment specification
+As an alternative, the file requirements.txt contains the needed packages. Creating a python venv, and executing 
+`pip install -r requirements.txt`
+will install the packages needed to run the code.
+
 
 ## Command line interface
 The program `run_CL.py` is called for all implemented examples, at the time of writing MNIST and Cifar10.

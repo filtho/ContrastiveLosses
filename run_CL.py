@@ -12,6 +12,12 @@ Options:
 import os
 import time
 from docopt import docopt, DocoptExit
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' 
+
+
+
+
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -21,16 +27,95 @@ from sklearn.manifold import TSNE
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.decomposition  import PCA
 import ContrastiveLosses as CL
-
+from set_tf_config_berzelius_1_proc_per_gpu import set_tf_config
+import json
 sns.set()
+
+def chief_print(str):
+
+    if "isChief" in os.environ:
+
+        if os.environ["isChief"] == "true":
+            tf.print(str)
+    else:
+        tf.print(str)
+
+def _isChief():
+
+	if "isChief" in os.environ:
+
+		if os.environ["isChief"] == "true":
+			return True
+		else:
+			return False
+	else:
+		return True
 
 if __name__ == '__main__':
 
     try:
         arguments = docopt(__doc__, version='CL')
     except DocoptExit:
-        print("Invalid command. Run 'python run_CL.py --help' for more information.")
+        chief_print("Invalid command. Run 'python run_CL.py --help' for more information.")
         exit(1)
+
+    if "SLURMD_NODENAME" in os.environ:
+
+        slurm_job = 1
+        addresses, chief, num_workers = set_tf_config()
+        isChief = os.environ["SLURMD_NODENAME"] == chief
+        os.environ["isChief"] = json.dumps(str(isChief))
+        chief_print(num_workers)
+
+        if num_workers > 1  and  not arguments["plot"]:
+
+            strategy = tf.distribute.MultiWorkerMirroredStrategy(cluster_resolver=tf.distribute.cluster_resolver.TFConfigClusterResolver(),
+                                                                communication_options=tf.distribute.experimental.CommunicationOptions(
+                                                                implementation=tf.distribute.experimental.CommunicationImplementation.NCCL)
+                                                                )
+        
+
+            if  not isChief:
+                tf.get_logger().setLevel('ERROR')
+                #tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+
+        
+            num_physical_gpus = len(tf.config.list_physical_devices(device_type='GPU'))
+
+            chief_print(tf.config.list_physical_devices(device_type='GPU'))
+            gpus = ["gpu:"+ str(i) for i in range(num_physical_gpus)]
+            #chief_print(gpus)
+
+
+        else:
+            if not isChief:
+                print("Work has ended for this worker, now relying only on the Chief.")
+                exit(0)
+            tf.print(tf.config.list_physical_devices(device_type='GPU'))
+            tf.print(tf.test.gpu_device_name())
+            num_physical_gpus = len(tf.config.list_physical_devices(device_type='GPU'))
+
+            chief_print(tf.config.list_physical_devices(device_type='GPU'))
+            gpus = ["gpu:"+ str(i) for i in range(num_physical_gpus)]
+            chief_print(gpus)
+            strategy =  tf.distribute.MirroredStrategy(devices = gpus, cross_device_ops=tf.distribute.NcclAllReduce())
+
+            slurm_job = 0
+        os.environ["isChief"] = json.dumps((isChief))
+
+    else:
+        isChief = True
+        slurm_job = 0
+        num_workers = 1
+
+        strategy =  tf.distribute.MirroredStrategy()
+
+
+
+
+
+
+
 
     save_dir = "./Results/"+ arguments["--dir"]+"/"
     os.makedirs(save_dir,exist_ok = True)
@@ -58,7 +143,7 @@ if __name__ == '__main__':
         plot_labels  = ["airplane", "automobile","bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"]
 
     else:
-        print(f"Not implemented for dataset {arguments['--data']}")
+        chief_print(f"Not implemented for dataset {arguments['--data']}")
 
 
     def preprocess_images(img):
@@ -170,34 +255,48 @@ if __name__ == '__main__':
 
             x = tf.keras.layers.Add()([x, y])
             return tf.keras.layers.Activation("relu")(x)
-    encoder = Encoder(2)
+    with strategy.scope():
+        encoder = Encoder(2)
 
     if arguments["train"]:
-        def run_optimization(model, opt, loss_function, inputs):
-            '''
-            Run one step of optimization process based on the given data.
+
+        with strategy.scope():
+            @tf.function
+            def run_optimization(model, opt, loss_function, inputs):
+                '''
+                Run one step of optimization process based on the given data.
 
 
-            :param model: a tf.keras.Model
-            :param opt: a tf.keras.optimizers
-            :param loss_function: a loss function
-            :param inputs: input data
-            :param targets: target data
-            :return: value of the loss function
-            '''
+                :param model: a tf.keras.Model
+                :param opt: a tf.keras.optimizers
+                :param loss_function: a loss function
+                :param inputs: input data
+                :return: value of the loss function
+                '''
 
-            with tf.GradientTape() as g:
-                output = model(inputs, training= True)
-                loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = output[tf.shape(output)[0] // 2:, :])
-                loss_value += tf.nn.scale_regularization_loss(tf.reduce_sum(model.losses))
-            gradients = g.gradient(loss_value, model.trainable_variables)
+                with tf.GradientTape() as g:
+                    output = model(inputs, training= True)
+                    loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = output[tf.shape(output)[0] // 2:, :])
+                    loss_value += tf.nn.scale_regularization_loss(tf.reduce_sum(model.losses))
+                gradients = g.gradient(loss_value, model.trainable_variables)
 
-            opt.apply_gradients(zip(gradients, model.trainable_variables))
-            return loss_value
+                opt.apply_gradients(zip(gradients, model.trainable_variables))
+                return loss_value
 
-        #loss_func = CL.Triplet
-        loss_func = CL.CentroidSS
-       
+            @tf.function
+            def distributed_train_step(model, opt, loss_function, inputs):
+
+                per_replica_losses = strategy.run(run_optimization, args=(model, opt, loss_function, inputs))
+
+                agg_loss = strategy.reduce("SUM", per_replica_losses, axis=None)
+                
+                return agg_loss
+
+
+
+            #loss_func = CL.Triplet
+            loss_func = CL.CentroidSS
+        
 
         schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
             initial_learning_rate =   0.1, # 0.000001, #for triplet, 0.1 for scaled centroid on mnist
@@ -213,7 +312,7 @@ if __name__ == '__main__':
         # Load the weights of a previous run:
         if arguments["--load_path"]:
             encoder.load_weights(arguments["--load_path"])
-        print(encoder.model.summary())
+        chief_print(encoder.model.summary())
 
 
         if dataset =="mnist" or dataset=="fashion_mnist":
@@ -248,6 +347,7 @@ if __name__ == '__main__':
             image = tf.concat([tf.image.random_hue(flip((image)), 0.05),tf.image.random_hue(flip((image)), 0.05)], axis  = 0)
             return  rot(image), label
 
+
         ds = tf.data.Dataset.from_tensor_slices((train_images, train_labels))
         ds = ds.shuffle(train_images.shape[0], reshuffle_each_iteration = True)
         ds = ds.prefetch(tf.data.AUTOTUNE)
@@ -260,8 +360,15 @@ if __name__ == '__main__':
             ds = ds.map(cifar_augmentation)
 
 
+        options = tf.data.Options()
+        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
+        ds = ds.with_options(options)
+        dds  = strategy.experimental_distribute_dataset(ds)
+        
         for e in range(epochs):
             t = time.perf_counter()
+           
+            
             if e%1 == 0 :
                 samples_to_plot = 2000
 
@@ -282,16 +389,14 @@ if __name__ == '__main__':
 
                 plt.savefig(save_dir+"Epoch: {}.pdf".format(e))
                 plt.close()
-
+            
             t0 = time.perf_counter()
             current_batch = 0
             a = 0
-            train_images2 = tf.random.shuffle(train_images[:num_samples, :])
 
-            for i, j in ds:
+            for input_data, input_label in dds:
                 current_batch += batch_size
-                input_data = i
-              
+                """
                 if current_batch%(batch_size*10) == 0: # Save image of augmented samples and where they get mapped, used in development - checking augmentations.
                     plt.figure()
                     plt.subplot(223)
@@ -312,15 +417,21 @@ if __name__ == '__main__':
                     plt.savefig(save_dir+"augmentation.pdf")
 
                     plt.close()
+                """
+                
+                a += distributed_train_step(encoder, optimizer, loss_func, input_data)
+
+            chief_print("Epoch {}, loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
 
 
-                a += run_optimization(encoder, optimizer, loss_func, input_data)
-
-            print("Epoch {}, loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
-
+            if _isChief():
+                weights_file_prefix = save_dir+'saved_model/epoch_{}'.format(e)
+            else:
+                weights_file_prefix ="/scratch/local/"+ str(e)+os.environ["SLURM_PROCID"] # Save to some junk directory, /scratch/local on Berra is a temp directory that deletes files after job is done.
+            
             if e % 100 ==0:
-                print("saving model at epoch {}".format(e))
-                encoder.save_weights(save_dir+'saved_model/epoch_{}'.format(e))
+                chief_print("saving model at epoch {}".format(e))
+                encoder.save_weights(weights_file_prefix)
 
             loss.append(a)
             times.append(time.perf_counter()-t0)
@@ -331,6 +442,9 @@ if __name__ == '__main__':
             plt.savefig(save_dir+"loss.pdf")
             plt.close()
 
+
+
+    
     elif arguments["plot"]:
 
         epochs = []
@@ -380,7 +494,7 @@ if __name__ == '__main__':
         neigh.fit(full_emb, labels)
         score = neigh.score(full_emb, labels)
 
-        print("3 Nearest neighbour classification score: {}".format(score))
+        chief_print("3 Nearest neighbour classification score: {}".format(score))
 
         pca = PCA(n_components=2)
         pca.fit(np.reshape(train_images, [num_samples, data_size**2*channels])[:num_samples, :])
@@ -394,7 +508,7 @@ if __name__ == '__main__':
         neigh3 = KNeighborsClassifier(n_neighbors=3)
         neigh3.fit(X_PCA[:, 0:1], train_labels[:N])
         scorePCA = neigh3.score(X_PCA[:, 0:1], train_labels[:N])
-        print(" PCA classification score: {}".format(scorePCA))
+        chief_print(" PCA classification score: {}".format(scorePCA))
 
         N = 60000
         X_embedded = TSNE(n_components=2, learning_rate='auto',
@@ -403,7 +517,7 @@ if __name__ == '__main__':
         neigh2 = KNeighborsClassifier(n_neighbors=3)
         neigh2.fit(X_embedded[:, 0:1], train_labels[:N])
         scoretsne = neigh2.score(X_embedded[:, 0:1], train_labels[:N])
-        print(" t-SNE classification score: {}".format(scoretsne))
+        chief_print(" t-SNE classification score: {}".format(scoretsne))
 
         plt.figure()
         D = pd.DataFrame({"x": X_embedded[:, 0], "y": X_embedded[:, 1], "color": train_labels})
