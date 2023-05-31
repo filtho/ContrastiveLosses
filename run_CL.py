@@ -13,10 +13,19 @@ import os
 import time
 from docopt import docopt, DocoptExit
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0' 
+
+if "SLURM_NTASKS_PER_NODE" in os.environ:
+	if int(os.environ["SLURM_NTASKS_PER_NODE"]) > 1:
+		if int(os.environ["SLURM_NTASKS_PER_NODE"]) != len((os.environ["CUDA_VISIBLE_DEVICES"]).split(",")):
+			print("Need to have either just 1 process for single-node-multi GPU jobs, or the same number of processes as gpus.")
+			exit(3)
+		else:
+			#If we use more than one task, we need to set devices. For more than 1 process on one node, it will otherwise try to use all gpus on all processes
+			os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["SLURM_LOCALID"]
 
 
-
+from datetime import datetime
 
 import numpy as np
 import tensorflow as tf
@@ -27,7 +36,7 @@ from sklearn.manifold import TSNE
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.decomposition  import PCA
 import ContrastiveLosses as CL
-from set_tf_config_berzelius_1_proc_per_gpu import set_tf_config
+from set_tf_config_berzelius import set_tf_config
 import json
 sns.set()
 
@@ -52,7 +61,6 @@ def _isChief():
 		return True
 
 if __name__ == '__main__':
-
     try:
         arguments = docopt(__doc__, version='CL')
     except DocoptExit:
@@ -110,12 +118,7 @@ if __name__ == '__main__':
 
         strategy =  tf.distribute.MirroredStrategy()
 
-
-
-
-
-
-
+    num_devices = strategy.num_replicas_in_sync
 
     save_dir = "./Results/"+ arguments["--dir"]+"/"
     os.makedirs(save_dir,exist_ok = True)
@@ -183,6 +186,15 @@ if __name__ == '__main__':
     marker_list = ["$0$", "$1$", "$2$","$3$", "$4$","$5$","$6$","$7$","$8$","$9$"]
     color_list  = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'black', 'white', 'gray', 'pink']
 
+    class dret(tf.keras.layers.Layer):
+        def __init__(self ):
+            super().__init__()
+        def call(self,inputs, training = True):
+            if training:
+                return tf.keras.layers.Concatenate(axis = 0)([inputs, inputs])
+            else:
+                return inputs
+
     class Encoder(tf.keras.Model):
         """ A class defining the model architecture, and the call logic."""
 
@@ -191,7 +203,10 @@ if __name__ == '__main__':
             self.latent_dim = latent_dim
 
             inputs = tf.keras.Input(shape=(data_size, data_size, channels))
-            x = tf.keras.layers.Conv2D(filters=32, kernel_size=3, strides=(2, 2), padding="same")(inputs)
+
+            x = self.augmentation(inputs)
+
+            x = tf.keras.layers.Conv2D(filters=32, kernel_size=3, strides=(2, 2), padding="same")(x)
             x = tf.keras.layers.Conv2D(filters=32, kernel_size=3, strides=(1, 1), padding="same")(x)
             x = tf.keras.layers.Conv2D(filters=64, kernel_size=3, strides=(1, 1), padding="same")(x)
             x = tf.keras.layers.MaxPool2D(pool_size=(3, 3), strides=2)(x)
@@ -219,6 +234,27 @@ if __name__ == '__main__':
             self.add_loss(reg_loss)
 
             return self.model(inputs)
+        def augmentation(self,inputs):
+
+
+            if arguments["--data"]=="mnist" or arguments["--data"]=="fashion_mnist":
+                rot = tf.keras.layers.RandomRotation(factor = 0.1, interpolation = 'bilinear', fill_mode = "constant", fill_value = 0.0)
+                shift =tf.keras.layers.RandomTranslation(0.2,0.2,fill_mode='constant',fill_value = 0)
+                zoom = tf.keras.layers.RandomZoom(height_factor = [0.,0.7],width_factor=[0.,0.7],fill_mode='constant',interpolation='bilinear',seed=None,fill_value=0.0, )
+
+                inputs2 = dret()(inputs)
+                x = shift(rot(zoom(inputs2)))
+            elif arguments["--data"]=="cifar10":
+                rot = tf.keras.layers.RandomRotation(factor=0.1, interpolation='bilinear')
+                shift = tf.keras.layers.RandomTranslation(0.1, 0.1, fill_mode='nearest', fill_value=0)
+                zoom = tf.keras.layers.RandomZoom(height_factor=[-0.3, -0.1], width_factor=[-0.3, -0.1], fill_mode='constant',
+                                                interpolation='bilinear', seed=None, fill_value=0.0, )
+                contrast = tf.keras.layers.RandomContrast(factor=0.4)
+                flip = tf.keras.layers.RandomFlip(mode="horizontal")
+
+                x = rot(flip(dret()(inputs)))
+
+            return x
 
         def S1_B2(self,x):
             """ A short implementation for a residual block"""
@@ -255,6 +291,9 @@ if __name__ == '__main__':
 
             x = tf.keras.layers.Add()([x, y])
             return tf.keras.layers.Activation("relu")(x)
+
+
+
     with strategy.scope():
         encoder = Encoder(2)
 
@@ -288,7 +327,7 @@ if __name__ == '__main__':
 
                 per_replica_losses = strategy.run(run_optimization, args=(model, opt, loss_function, inputs))
 
-                agg_loss = strategy.reduce("SUM", per_replica_losses, axis=None)
+                agg_loss = strategy.reduce("MEAN", per_replica_losses, axis=None)
                 
                 return agg_loss
 
@@ -298,21 +337,22 @@ if __name__ == '__main__':
             loss_func = CL.CentroidSS
         
 
-        schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
-            initial_learning_rate =   0.1, # 0.000001, #for triplet, 0.1 for scaled centroid on mnist
-            first_decay_steps = 1e5,
-            t_mul=1,
-            m_mul=.95,
-            alpha=1e-5,
-            name=None
-        )
-        #optimizer = tf.optimizers.Adam(learning_rate = schedule, beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
-        optimizer = tf.optimizers.SGD(learning_rate=schedule, momentum=0.9,nesterov=True)  # , beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
+            schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
+                initial_learning_rate =   0.05, # 0.000001, #for triplet, 0.1 for scaled centroid on mnist
+                first_decay_steps = 1e5,
+                t_mul=1,
+                m_mul=.95,
+                alpha=1e-5,
+                name=None
+            )
+            #optimizer = tf.optimizers.Adam(learning_rate = schedule, beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
+            optimizer = tf.optimizers.SGD(learning_rate=schedule, momentum=0.9,nesterov=True)  # , beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
 
-        # Load the weights of a previous run:
-        if arguments["--load_path"]:
-            encoder.load_weights(arguments["--load_path"])
-        chief_print(encoder.model.summary())
+            # Load the weights of a previous run:
+            if arguments["--load_path"]:
+                encoder.load_weights(arguments["--load_path"])
+            if _isChief():
+                encoder.model.summary()
 
 
         if dataset =="mnist" or dataset=="fashion_mnist":
@@ -328,100 +368,98 @@ if __name__ == '__main__':
                                               interpolation='bilinear', seed=None, fill_value=0.0, )
             contrast = tf.keras.layers.RandomContrast(factor=0.4)
             flip = tf.keras.layers.RandomFlip(mode="horizontal")
-            brightness = tf.keras.layers.RandomBrightness(factor = 0.0, value_range = (0,1))
+            #brightness = tf.keras.layers.RandomBrightness(factor = 0.0, value_range = (0,1))
 
         epochs =    1000
-        batch_size = 200
+        local_batch_size = 100
+        batch_size = local_batch_size * num_devices
         num_samples =  train_images.shape[0]
         loss = []
         times = []
         epoch_vec = []
 
 
-
-        def mnist_augmentation(image,label):
-            image =  tf.concat([image,image], axis  = 0)
-            return  shift(rot(zoom(image))), label
-
-        def cifar_augmentation(image,label):
-            image = tf.concat([tf.image.random_hue(flip((image)), 0.05),tf.image.random_hue(flip((image)), 0.05)], axis  = 0)
-            return  rot(image), label
-
-
         ds = tf.data.Dataset.from_tensor_slices((train_images, train_labels))
         ds = ds.shuffle(train_images.shape[0], reshuffle_each_iteration = True)
-        ds = ds.prefetch(tf.data.AUTOTUNE)
         ds = ds.batch(batch_size)
-
-        if dataset=="mnist" or dataset=="fashion_mnist":
-
-            ds = ds.map(mnist_augmentation)
-        elif dataset =="cifar10":
-            ds = ds.map(cifar_augmentation)
-
+        ds = ds.prefetch(tf.data.AUTOTUNE)
 
         options = tf.data.Options()
         options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
         ds = ds.with_options(options)
         dds  = strategy.experimental_distribute_dataset(ds)
         
+
         for e in range(epochs):
             t = time.perf_counter()
            
+
+            if "SLURM_PROCID" in os.environ:
+                suffix = str(os.environ["SLURM_PROCID"])
+            else:
+                suffix = ""
+
+            logs = save_dir+ "/logdir/"  + datetime.now().strftime("%Y%m%d-%H%M%S") +"_"+ suffix
+            profile = 0      
+            if profile and e ==1: tf.profiler.experimental.start(logs)
+            
             
             if e%1 == 0 :
-                samples_to_plot = 2000
+                samples_to_plot = 20000
 
-                if dataset=="mnist" or dataset=="fashion_mnist":
-                    emb = encoder(train_images[:samples_to_plot, :], training = False)
-                elif dataset =="cifar10":
-                    emb = encoder(train_images[:samples_to_plot, :], training = False)
+                emb = encoder(train_images[:samples_to_plot, :], training = False)
+                
+                if  _isChief():
+                    plt.figure()
+                    ax = plt.gca()
+
+                    D = pd.DataFrame({"x": emb[:, 0], "y": emb[:, 1], "label": tf.gather(plot_labels, tf.cast(train_labels[:samples_to_plot], tf.int32)).numpy().astype(str)})
+                    sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"), legend="brief",hue_order = plot_labels)  
 
 
-                plt.figure()
-                ax = plt.gca()
+                    plt.title("Epoch: {}".format(e))
+                    plt.legend(fontsize='x-small', title_fontsize='40')
 
-                D = pd.DataFrame({"x": emb[:, 0], "y": emb[:, 1], "label": tf.gather(plot_labels, tf.cast(train_labels[:samples_to_plot], tf.int32)).numpy().astype(str)})
-                sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"), legend="brief",hue_order = plot_labels)  
-
-                plt.title("Epoch: {}".format(e))
-                plt.legend(fontsize='x-small', title_fontsize='40')
-
-                plt.savefig(save_dir+"Epoch: {}.pdf".format(e))
-                plt.close()
-            
+                    plt.savefig(save_dir+"Epoch: {}.pdf".format(e))
+                    plt.close()
+                
             t0 = time.perf_counter()
             current_batch = 0
             a = 0
 
+
             for input_data, input_label in dds:
                 current_batch += batch_size
-                """
-                if current_batch%(batch_size*10) == 0: # Save image of augmented samples and where they get mapped, used in development - checking augmentations.
-                    plt.figure()
-                    plt.subplot(223)
-                    plt.imshow(input_data[0]*std_train + mu_train, cmap="gray")
-                    plt.subplot(224)
-                    plt.imshow(input_data[batch_size]*std_train + mu_train, cmap="gray")
-
-                    emb2 = encoder(input_data)
-
-                    plt.subplot(211)
-                    plt.scatter(emb2.numpy()[:, 0], emb2.numpy()[:, 1], color = 'k')
-                    plt.scatter(emb2.numpy()[0, 0], emb2.numpy()[0, 1],color ='g')
-                    plt.scatter(emb2.numpy()[batch_size, 0], emb2.numpy()[batch_size, 1],color = 'b')
-
-                    distances = tf.sqrt(
-                        tf.reduce_sum((emb2[:, :, tf.newaxis] - tf.transpose(emb2[:, :, tf.newaxis])) ** 2, axis=1))
-
-                    plt.savefig(save_dir+"augmentation.pdf")
-
-                    plt.close()
-                """
                 
-                a += distributed_train_step(encoder, optimizer, loss_func, input_data)
+                if _isChief():
+                    # This can only be done on a single gpu run as of now. It dislikes transforming stuff that are already sdistributed
+                    if current_batch%(batch_size*10000) == 0: # Save image of augmented samples and where they get mapped, used in development - checking augmentations.
+                        augmented_images = encoder.augmentation(input_data)
 
-            chief_print("Epoch {}, loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
+                        emb2 = encoder(augmented_images)
+                        plt.figure()
+                        plt.subplot(223)
+                        plt.imshow(augmented_images[0]*std_train + mu_train, cmap="gray")
+                        plt.subplot(224)
+                        plt.imshow(augmented_images[local_batch_size]*std_train + mu_train, cmap="gray")
+
+                    
+                        plt.subplot(211)
+                        plt.scatter(emb2.numpy()[:, 0], emb2.numpy()[:, 1], color = 'k')
+                        plt.scatter(emb2.numpy()[0, 0], emb2.numpy()[0, 1],color ='g')
+                        plt.scatter(emb2.numpy()[local_batch_size, 0], emb2.numpy()[local_batch_size, 1],color = 'b')
+
+                        distances = tf.sqrt(
+                            tf.reduce_sum((emb2[:, :, tf.newaxis] - tf.transpose(emb2[:, :, tf.newaxis])) ** 2, axis=1))
+                        #TODO: show which samples have been used as negatives :)
+
+
+                        plt.savefig(save_dir+"augmentation.pdf")
+                        plt.close()
+                a += distributed_train_step(encoder, optimizer, loss_func, input_data)
+                
+            #chief_print("Epoch {}, loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
+            chief_print(f"Epoch {e}, Loss: {a/num_samples}, time: {time.perf_counter()-t0}") # , loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
 
 
             if _isChief():
@@ -441,6 +479,7 @@ if __name__ == '__main__':
             plt.plot(epoch_vec, loss)
             plt.savefig(save_dir+"loss.pdf")
             plt.close()
+        if profile: tf.profiler.experimental.stop()
 
 
 
