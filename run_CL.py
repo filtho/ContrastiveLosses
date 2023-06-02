@@ -224,7 +224,7 @@ if __name__ == '__main__':
             x = tf.keras.layers.Dense(75)(x)
 
             outputs = tf.keras.layers.Dense(2)(x)
-            outputs = tf.keras.layers.GaussianNoise(stddev=4.66)(outputs)
+            outputs = tf.keras.layers.GaussianNoise(stddev=1)(outputs) # 4.66
             self.model = tf.keras.Model(inputs=inputs, outputs=outputs, name="Model")
 
         def call(self, inputs):
@@ -327,24 +327,27 @@ if __name__ == '__main__':
 
                 per_replica_losses = strategy.run(run_optimization, args=(model, opt, loss_function, inputs))
 
-                agg_loss = strategy.reduce("MEAN", per_replica_losses, axis=None)
+                agg_loss = strategy.reduce("SUM", per_replica_losses, axis=None)
                 
                 return agg_loss
 
 
+            
+            #loss_func = CL.Triplet_loss(alpha = 1,mode = 'random', distance = "L2")
+            loss_func = CL.centroid_loss(n_pairs = 20,mode = 'distance_weighted_random', distance = "L2")
 
-            #loss_func = CL.Triplet
-            loss_func = CL.CentroidSS
-        
+            
+
 
             schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
-                initial_learning_rate =   0.05, # 0.000001, #for triplet, 0.1 for scaled centroid on mnist
+                initial_learning_rate =   0.05, #0.000001, #for triplet, 0.1 for scaled centroid on mnist
                 first_decay_steps = 1e5,
                 t_mul=1,
                 m_mul=.95,
                 alpha=1e-5,
                 name=None
             )
+            
             #optimizer = tf.optimizers.Adam(learning_rate = schedule, beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
             optimizer = tf.optimizers.SGD(learning_rate=schedule, momentum=0.9,nesterov=True)  # , beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
 
@@ -370,8 +373,8 @@ if __name__ == '__main__':
             flip = tf.keras.layers.RandomFlip(mode="horizontal")
             #brightness = tf.keras.layers.RandomBrightness(factor = 0.0, value_range = (0,1))
 
-        epochs =    1000
-        local_batch_size = 100
+        epochs =    100
+        local_batch_size = 1000
         batch_size = local_batch_size * num_devices
         num_samples =  train_images.shape[0]
         loss = []
@@ -400,7 +403,7 @@ if __name__ == '__main__':
                 suffix = ""
 
             logs = save_dir+ "/logdir/"  + datetime.now().strftime("%Y%m%d-%H%M%S") +"_"+ suffix
-            profile = 0      
+            profile = 0  
             if profile and e ==1: tf.profiler.experimental.start(logs)
             
             

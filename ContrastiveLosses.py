@@ -1,6 +1,5 @@
 import tensorflow as tf
 
-
 def gumbel_max(logits, K):
     # Inspired by (blatantly taken from) https://github.com/tensorflow/tensorflow/issues/9260
     if tf.shape(logits)[0] == 0:
@@ -12,144 +11,213 @@ def gumbel_max(logits, K):
         return indices
 
 
+def lp_distance(x,y,p):
+    """ 
+    Compute the pairwise L_p distance between x and y. Assumes that x and y are ordered as [samples, embedding_dimension]
+    """
+    return tf.reduce_sum( (x-y)**p , axis = 1)
 
-def CentroidSS(anchors, positives     ):
-    # This loss should have only 2D output, and no L2 normalization on the output.
-    # Input shape of y_pred here is [2* batch size, dimension of embedding (most cases = 2)]
+def distance_matrix(x,y):
+    """ 
+    Compute the pairwise L_2 distance for all pairs in x and y. Assumes that x and y are ordered as [samples, embedding_dimension]
+    """
 
-    assert len(anchors) == len(positives), f"The number of positive samples need to be the same as the number of " \
-                                           f"anchors, now they have shapes {anchors.shape} vs {positives.shape} "
-
-    # Want to have "regular" n-pair loss, but instead of computing vectors from the origin, compute
-    # them with respect to some other point. We talked first about doing this with respect to the
-    # mean coordinate of all the samples considered, but one thought I had was that, for large N, this
-    # would in mean result in just using __approximately__ the origin.
-    # Carl had an idea to use different centroids for each considered negative for each sample.
-    # The centroid would then sort of be "(A+P+2*N)/4", weighting N twice since most likely A and P will lie close.
-
-    n = tf.shape(anchors)[0] # Number of samples in the current batch.
-
-    if tf.shape(anchors)[0] == 0:  # To not have to handle empty batches which may come up in distributed training.
-        return 0.
-
-    N_pairs = n - 1  # This means take as many as possible, There has been some issues when last batch smaller than N_pairs,
-    # looping over tensors are forbidden, and is how I create one tensor, in the non-distance choice case.
-
-    # Take at most 50 samples. This could maybe minimize the effect that we get rays from the center.
-    # Do this in conjunction with distance based negatives - takes 50 closest points. If we take full batch and normalize, we will repel from the center.
-    #
-    N_pairs = tf.minimum(20, n - 1)
-
-    # In the regular case, we would need to compute only one dot product for the positive samples, now
-    # we need to do it N times for each sample.
-
-    A = anchors # z[0:size // 2, :]  # Anchors
-    P = positives # z[size // 2:, :]  # Positives
-
-    A_full = tf.tile(A[:, tf.newaxis, :], [1, N_pairs, 1])
-    P_full = tf.tile(P[:, tf.newaxis, :], [1, N_pairs, 1])
-
-    # Two ways of choosing the negative samples, either as just the next sample in the batch
-    # N = tf.concat([z[i + 1:n + i + 1, tf.newaxis, :] for i in range(N_pairs)], axis=1) # Negatives
-
-    # Or sampled randomly, with the inverse distance as the unnormalized probability of being chosen
-    # The Gumbel-max trick makes it possible to do categorical sampling wihout replacement.
-    distances = tf.sqrt(tf.reduce_sum((A[:, :, tf.newaxis] - tf.transpose(A[:, :, tf.newaxis])) ** 2, axis=1))
-
-    # Distance based random choice of negatives:
-    logodds = tf.math.log((distances + tf.eye(tf.shape(distances)[0])) ** -1 - tf.eye(tf.shape(distances)[0]))
-
-    # Uniform choice:
-    # logodds = tf.math.log(tf.ones(tf.shape(distances)[0])  - 0.999 * tf.eye(tf.shape(distances)[0])) # 0.999 here since if == 1, then we get -inf probability. This produced error when using check_numerics
-
-    inds = gumbel_max(logodds, N_pairs)
-    N = tf.gather(A, inds)
-
-    if tf.shape(inds)[1] == 0:
-        return 0.
-
-    C = (A_full + P_full + 2 * N) / 4  # Centroids
-
-    # The loss function is sum_samples(log (1 + sum_negatives( exp( (A-C)'*(A-N)- (A-C)'* (A-P)  ))) )
-    # Take the minus in the exponent, and compute is as a division, and correct for overflow with m and
-    # underflow with eps.
-
-    AC = A_full - C
-    NC = N - C
-    PC = P_full - C
-
-    # Normalization with max_vec makes  all distances seem the same for the loss function,
-    # This means that very far negatives, will now not be 0-loss, but instead aid in cluster separation.
-
-    max_vec = tf.tile(tf.reduce_max(tf.stack(
-        [tf.reduce_sum(AC ** 2, axis=-1), tf.reduce_sum(NC ** 2, axis=-1), tf.reduce_sum(PC ** 2, axis=-1)], axis=-1),
-        axis=-1)[:, :, tf.newaxis], [1, 1, tf.shape(anchors)[1]])
-
-    # max_vec =  tf.tile(tf.reduce_mean(tf.stack(
-    #	[tf.reduce_sum(AC ** 2, axis=-1), tf.reduce_sum(NC ** 2, axis=-1), tf.reduce_sum(PC ** 2, axis=-1)], axis=-1), axis=-1)[:, :, tf.newaxis], [1, 1, tf.shape(z)[1]])
-
-    # max_vec = 1
-
-    # Changed this from a sum to a mean. I take some issue with the fact that if A=P, then AN-AP = -2, since
-    # the centroid will be placed exactly in between them.
-    # num = tf.reduce_mean(max_vec ** -1 * (A_full - C) * (N - C), axis=2)
-    # denom = tf.reduce_mean(max_vec ** -1 * (A_full - C) * (P_full - C),axis=2)
-
-    num = tf.reduce_sum(max_vec ** -1 * (A_full - C) * (N - C), axis=2)
-    denom = tf.reduce_sum(max_vec ** -1 * (A_full - C) * (P_full - C), axis=2)
-
-    # num = tf.cast(1. / N_pairs, tf.float32) * tf.reduce_sum((A_full - C) * (N - C), axis=2)
-    # denom = tf.cast(1. / N_pairs, tf.float32) * tf.reduce_sum((A_full - C) * (P_full - C), axis=2)
-
-    # m = tf.reduce_max(tf.stack([tf.reduce_max(num), tf.reduce_max(denom)], axis=0))
-
-    m = tf.reduce_max(tf.stack([num, denom], axis=-1), axis=-1)
-
-    eps = 1e-12
-
-    loss = 1 / tf.cast(n, tf.float32) * tf.reduce_sum(tf.math.log(
-        1 + tf.reduce_sum(-tf.math.exp(-2.) + tf.math.exp(num - m) / (tf.math.exp(denom - m) + eps), axis=1)))
+    return  tf.sqrt(tf.reduce_sum((x[:,:,tf.newaxis] - tf.transpose(y[:,:,tf.newaxis]))**2,axis = 1))
 
 
-    return loss
+def random_negatives(anchors, negative_pool, n_pairs):
+    """
+    Draws n_pairs negative samples randomly from the negative pool for each samples in anchors.
+    """
+    n = tf.math.minimum(tf.shape(anchors)[0], tf.shape(negative_pool)[0])
+    n_pairs = tf.minimum(n_pairs, n - 1)
+
+    indices = tf.random.uniform(shape=[tf.shape(anchors)[0], n_pairs], minval=0, maxval=tf.shape(negative_pool)[0],
+                                dtype=tf.dtypes.int32)
+    N = tf.gather(params=negative_pool, indices=indices)
+    
+    return N
+
+def negatives_by_distance_random(anchors, negative_pool, n_pairs):
+    """
+    Draws n_pairs negative samples from the negative_pool for each sample in anchors. Choice is done by drawing them at random, with weights corresponding to the inverse distance.
+    """
+
+    n = tf.math.minimum(tf.shape(anchors)[0], tf.shape(negative_pool)[0])
+    n_pairs = tf.minimum(n_pairs, n - 1)
+
+    distances = distance_matrix(anchors, negative_pool)
+
+    I = tf.eye(tf.shape(distances)[0], tf.shape(distances)[1])
+    logodds = tf.math.log((distances + I) ** -1 - I)
+    inds = gumbel_max(logodds, n_pairs)
+    N = tf.gather(negative_pool, inds)
+
+    return N
 
 
-def Triplet(anchors, positives, alpha = 1):
-
-    # This is just basic triplet loss
-
-    # Try to choose the closest one in the batch as the negative?
-    #anchors = z[0:size // 2, :]
-    #positives = z[size // 2:, :]
-
-    # Taking the negative as some other sample in the batch
-    negatives = tf.concat([anchors[1:,:], anchors[0,tf.newaxis,:]], axis = 0)
+def negatives_by_distance(anchors, negative_pool, n_pairs):
+    """
+    Draws n_pairs negative samples from the negative_pool for each sample in anchors.
+    Choice is done by drawing only the n_pairs closest ones.
+    """
 
 
-    distances = tf.sqrt(tf.reduce_sum((anchors[:,:,tf.newaxis] - tf.transpose(anchors[:,:,tf.newaxis]))**2,axis = 1))
+    n = tf.math.minimum(tf.shape(anchors)[0], tf.shape(negative_pool)[0])
+    n_pairs = tf.minimum(n_pairs, n - 1)
 
-    argsorted_indices = tf.argsort(distances, axis = 0, direction="ASCENDING")
-    #argsorted_indices[1, :]
+    distances = distance_matrix(anchors, tf.concat([anchors,anchors], axis = 0))
+    argsorted_indices = tf.argsort(distances, axis=1, direction="ASCENDING")
+    indices = argsorted_indices[:,1:n_pairs+1]
+    N = tf.gather(params = negative_pool, indices = indices)
 
-    #if tf.random.uniform([1]) <0.0:
+    return N
 
-    #	negatives =tf.gather( anchors,argsorted_indices[5,:])
-        #tf.print("nearest samples used")
-    #else:
-        #tf.print("just random")
-    #	pass
-    #tf.print(tf.shape(tf.gather( anchors,argsorted_indices[5,:])))
 
-    # L2-distance
-    anchor_pos = tf.reduce_sum( (anchors - positives) **2, axis = 1)
-    anchor_neg = tf.reduce_sum( (anchors - negatives) **2 , axis = 1)
-
-    # L1-distance
-    #anchor_pos = tf.reduce_sum( tf.math.abs(anchors - positives) , axis = 1)
-    #anchor_neg = tf.reduce_sum(  tf.math.abs(anchors - negatives) , axis = 1)
+def generate_negatives(mode, n_pairs):
 
 
 
+    if mode == "random":
+        generate_negatives_fun = lambda anchors, negative_pool: random_negatives(anchors, negative_pool, n_pairs)
 
-    return tf.reduce_sum(tf.math.maximum( anchor_pos - anchor_neg+ alpha, 0 ) )
+    elif mode == "closest":
+        generate_negatives_fun = lambda anchors, negative_pool : negatives_by_distance(anchors, negative_pool, n_pairs)
 
+    elif mode == "distance_weighted_random":
+        generate_negatives_fun = lambda anchors, negative_pool : negatives_by_distance_random(anchors, negative_pool, n_pairs)
+
+    else:
+        exit(f"Incorrect mode for the choice of negatives in the loss function. Mode \"{mode}\" is not supported. Only \"random\",\"closest\",\"distance_weighted_random\" are implemented")
+
+    return generate_negatives_fun
+
+
+
+class ContrastiveLoss():
+
+    def __init__(self): 
+        exit("This is a base class for the implementations, You are not supposed to do this...")
+
+        return 
+
+        
+    def __call__(self, anchors, positives): 
+            
+        if tf.distribute.has_strategy():
+            global_anchors, global_positives = self.gather_samples(anchors, positives)
+
+            loss =  ( self.compute_loss(anchors,positives, tf.stop_gradient(global_anchors)) + self.compute_loss(tf.stop_gradient(global_anchors),tf.stop_gradient(global_positives), anchors)  ) / 2
+
+        else:
+            loss = self.compute_loss(anchors,positives,anchors)    
+    
+        return loss
+
+
+    def gather_samples(self, anchors, positives):
+        strategy=tf.distribute.get_strategy()
+        global_anchors = tf.distribute.get_replica_context().all_gather(anchors, axis = 0)
+        global_positives = tf.distribute.get_replica_context().all_gather(positives, axis = 0)
+        return global_anchors, global_positives
+
+    def loss(self,A,P,N):
+
+        return 1
+
+
+class Triplet_loss(ContrastiveLoss):
+    
+    def __init__(self, alpha = 1, mode = 'random', distance ="L2"):
+        self.alpha = alpha
+        self.mode = mode
+
+
+        if   distance == "L2":
+            self.distance = lambda A,P: lp_distance(A,P,2)
+        elif distance== "L1":
+            self.distance = lambda A,P: lp_distance(A,P,1)
+        else:
+            exit("Currently only supports L1 and L2 distances.")
+
+        self.generate_negatives = generate_negatives(mode = mode, n_pairs = 1)
+
+    def compute_loss(self, anchors, positives, negative_pool):
+        
+
+        negatives = tf.squeeze(self.generate_negatives(anchors, negative_pool), axis = 1)
+
+        anchor_pos = self.distance(anchors, positives)
+        anchor_neg = self.distance(anchors, negatives)
+        
+        loss = tf.reduce_sum(tf.math.maximum( anchor_pos - anchor_neg+ self.alpha, 0 ) )
+
+        return loss
+
+
+class centroid_loss(ContrastiveLoss):
+    
+    def __init__(self, n_pairs = 20, mode = 'distance_weighted_random', distance ="L2"):
+        self.mode = mode
+
+
+        if   distance == "L2":
+            self.distance = lambda A,P: lp_distance(A,P,2)
+        elif distance== "L1":
+            self.distance = lambda A,P: lp_distance(A,P,1)
+        else:
+            exit("Currently only supports L1 and L2 distances.")
+
+
+        self.generate_negatives = generate_negatives(mode = mode, n_pairs = n_pairs)
+
+    def compute_loss(self,anchors, positives, negative_pool):
+        """
+        This loss should have only 2D output, and no L2 normalization on the output.
+        Input shapes in the single gpu case here is [batch size, dimension of embedding (most cases = 2)]
+
+        Want to have "regular" n-pair loss, but instead of computing vectors from the origin, compute
+        them with respect to some other point. We talked first about doing this with respect to the
+        mean coordinate of all the samples considered, but one thought I had was that, for large N, this
+        would in mean result in just using __approximately__ the origin.
+        Carl had an idea to use different centroids for each considered negative for each sample.
+        The centroid would then sort of be "(A+P+2*N)/4", weighting N twice since most likely A and P will lie close.
+        
+        The loss function is sum_samples(log (1 + sum_negatives( exp( (A-C)'*(A-N)- (A-C)'* (A-P)  ))) )
+       
+        """
+
+        n =  tf.shape(anchors)[0]
+        if tf.shape(anchors)[0] == 0 or tf.shape(negative_pool)[0] == 0 :  # To not have to handle empty batches which may come up in distributed training.
+            return 0.
+
+        A = anchors
+        P = positives 
+        N = self.generate_negatives(anchors,negative_pool)
+
+        A_full = tf.tile(A[:, tf.newaxis, :], [1, tf.shape(N)[1], 1])
+        P_full = tf.tile(P[:, tf.newaxis, :], [1, tf.shape(N)[1], 1])
+        
+        C = (A_full + P_full + 2 * N) / 4  
+
+        AC = A_full - C
+        NC = N - C
+        PC = P_full - C
+
+        max_vec = tf.tile(tf.reduce_max(tf.stack(
+            [tf.reduce_sum(AC ** 2, axis=-1), tf.reduce_sum(NC ** 2, axis=-1), tf.reduce_sum(PC ** 2, axis=-1)], axis=-1),
+            axis=-1)[:, :, tf.newaxis], [1, 1, tf.shape(anchors)[1]])
+            
+
+        num = tf.reduce_sum(max_vec ** -1 * AC * NC, axis=2)
+        denom = tf.reduce_sum(max_vec ** -1 * AC *PC, axis=2)
+
+        m = tf.reduce_max(tf.stack([num, denom], axis=-1), axis=-1)
+
+        eps = 1e-12
+
+        loss = 1 / tf.cast(n, tf.float32) * tf.reduce_sum(tf.math.log(
+            1 + tf.reduce_sum(-tf.math.exp(-2.) + tf.math.exp(num - m) / (tf.math.exp(denom - m) + eps), axis=1)))
+
+
+        return loss
