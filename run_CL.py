@@ -26,7 +26,7 @@ if "SLURM_NTASKS_PER_NODE" in os.environ:
 
 
 from datetime import datetime
-
+import csv
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -39,6 +39,7 @@ import ContrastiveLosses as CL
 from set_tf_config_berzelius import set_tf_config
 import json
 sns.set()
+
 
 def chief_print(str):
 
@@ -59,6 +60,30 @@ def _isChief():
 			return False
 	else:
 		return True
+
+def write_to_csv(destination, values, epoch_number):
+    """
+    Appends the value in values and the current epoch to the csv file specified in destination.
+    """
+    if _isChief():
+        values_write = tf.concat([tf.reshape(tf.convert_to_tensor(tf.cast(epoch_number,tf.float32)), [1, 1]), tf.reshape(tf.cast(values, tf.float32),[1,1])],axis = 1).numpy()[0]
+
+        with open(destination, 'a', newline='',  encoding="utf-8") as fd:
+            writer = csv.writer(fd)
+            writer.writerow([str(i) for i in values_write])
+
+def compute_KNN_accuracy(data, labels, k = 3):
+    """
+    Computes the knn-classification accuracy. 
+    Assuming that data contains the coordinates for the samples, in the format [n_samples, dimension]
+    """
+    knn = KNeighborsClassifier(n_neighbors=3)
+    knn.fit(data, labels)
+    score = knn.score(data,labels)
+
+    return score
+
+
 
 if __name__ == '__main__':
     try:
@@ -122,6 +147,7 @@ if __name__ == '__main__':
 
     save_dir = "./Results/"+ arguments["--dir"]+"/"
     os.makedirs(save_dir,exist_ok = True)
+    os.makedirs(save_dir+"stats", exist_ok=True)
     # Load data
     if arguments["--data"]=="mnist":
         (train_images, train_labels), (test_images, test_labels) = tf.keras.datasets.mnist.load_data()
@@ -187,8 +213,7 @@ if __name__ == '__main__':
     color_list  = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'black', 'white', 'gray', 'pink']
 
     class dret(tf.keras.layers.Layer):
-        def __init__(self ):
-            super().__init__()
+
         def call(self,inputs, training = True):
             if training:
                 return tf.keras.layers.Concatenate(axis = 0)([inputs, inputs])
@@ -332,13 +357,10 @@ if __name__ == '__main__':
                 return agg_loss
 
 
-            
             #loss_func = CL.Triplet_loss(alpha = 1,mode = 'random', distance = "L2")
             loss_func = CL.centroid_loss(n_pairs = 20,mode = 'distance_weighted_random', distance = "L2")
 
             
-
-
             schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
                 initial_learning_rate =   0.05, #0.000001, #for triplet, 0.1 for scaled centroid on mnist
                 first_decay_steps = 1e5,
@@ -374,7 +396,7 @@ if __name__ == '__main__':
             #brightness = tf.keras.layers.RandomBrightness(factor = 0.0, value_range = (0,1))
 
         epochs =    100
-        local_batch_size = 1000
+        local_batch_size = 200
         batch_size = local_batch_size * num_devices
         num_samples =  train_images.shape[0]
         loss = []
@@ -386,12 +408,15 @@ if __name__ == '__main__':
         ds = ds.shuffle(train_images.shape[0], reshuffle_each_iteration = True)
         ds = ds.batch(batch_size)
         ds = ds.prefetch(tf.data.AUTOTUNE)
-
         options = tf.data.Options()
         options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
         ds = ds.with_options(options)
         dds  = strategy.experimental_distribute_dataset(ds)
         
+        ds_validation = tf.data.Dataset.from_tensor_slices((test_images, test_labels))
+        ds_validation = ds_validation.shuffle(test_images.shape[0], reshuffle_each_iteration = True)
+        ds_validation = ds_validation.batch(batch_size)
+        ds_validation = ds_validation.prefetch(tf.data.AUTOTUNE)
 
         for e in range(epochs):
             t = time.perf_counter()
@@ -408,15 +433,31 @@ if __name__ == '__main__':
             
             
             if e%1 == 0 :
-                samples_to_plot = 20000
-
-                emb = encoder(train_images[:samples_to_plot, :], training = False)
                 
+                validation_embedding = None
+                validation_labels = None
+
+                for valid_image, valid_label in ds_validation:
+
+                    emb = encoder(valid_image, training = False)
+                    if validation_embedding == None:
+                        validation_embedding =emb
+                        validation_labels = valid_label
+                    else:
+                                
+                        validation_embedding = tf.concat([validation_embedding, emb], axis = 0)
+                        validation_labels = tf.concat([validation_labels, valid_label], axis = 0)
+ 
+                acc = compute_KNN_accuracy(validation_embedding, validation_labels)
+
+                write_to_csv(save_dir+"/stats/KNN_acc.csv",acc,e)
+
+
                 if  _isChief():
                     plt.figure()
                     ax = plt.gca()
 
-                    D = pd.DataFrame({"x": emb[:, 0], "y": emb[:, 1], "label": tf.gather(plot_labels, tf.cast(train_labels[:samples_to_plot], tf.int32)).numpy().astype(str)})
+                    D = pd.DataFrame({"x": validation_embedding[:, 0], "y": validation_embedding[:, 1], "label": validation_labels.numpy().astype(str)})
                     sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"), legend="brief",hue_order = plot_labels)  
 
 
@@ -425,6 +466,15 @@ if __name__ == '__main__':
 
                     plt.savefig(save_dir+"Epoch: {}.pdf".format(e))
                     plt.close()
+                    plt.figure()
+                    acc_plot =pd.read_csv(save_dir + "/stats/KNN_acc.csv",header = None).to_numpy()
+                    plt.plot(acc_plot[:,0], acc_plot[:,1])
+                    plt.savefig(save_dir + "/stats/KNN_acc.pdf")
+                    plt.close()
+
+
+                chief_print(f" KNN classification accuracy on the validation dataset: {acc}")
+
                 
             t0 = time.perf_counter()
             current_batch = 0
@@ -460,13 +510,21 @@ if __name__ == '__main__':
                         plt.savefig(save_dir+"augmentation.pdf")
                         plt.close()
                 a += distributed_train_step(encoder, optimizer, loss_func, input_data)
-                
+               
+           
             #chief_print("Epoch {}, loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
             chief_print(f"Epoch {e}, Loss: {a/num_samples}, time: {time.perf_counter()-t0}") # , loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
 
 
             if _isChief():
+                write_to_csv(save_dir+"stats/loss.csv", a, e)
                 weights_file_prefix = save_dir+'saved_model/epoch_{}'.format(e)
+                plt.figure()
+                loss_plot =pd.read_csv(save_dir + "/stats/loss.csv",header = None).to_numpy()
+                plt.plot(loss_plot[:,0], loss_plot[:,1])
+                plt.savefig(save_dir + "/stats/loss.pdf")
+
+                plt.close()
             else:
                 weights_file_prefix ="/scratch/local/"+ str(e)+os.environ["SLURM_PROCID"] # Save to some junk directory, /scratch/local on Berra is a temp directory that deletes files after job is done.
             
@@ -532,10 +590,7 @@ if __name__ == '__main__':
             plt.savefig(save_dir+dataset +"_"+epoch+".png")
             plt.close()
 
-        neigh = KNeighborsClassifier(n_neighbors=3)
-        neigh.fit(full_emb, labels)
-        score = neigh.score(full_emb, labels)
-
+        score = compute_KNN_accuracy(full_emb, labels)
         chief_print("3 Nearest neighbour classification score: {}".format(score))
 
         pca = PCA(n_components=2)
@@ -547,18 +602,17 @@ if __name__ == '__main__':
         sns.scatterplot(data=D, x="x", y="y", hue="color", palette=sns.color_palette("tab10"), legend="brief")
         plt.savefig(save_dir+"pca.pdf")
 
-        neigh3 = KNeighborsClassifier(n_neighbors=3)
-        neigh3.fit(X_PCA[:, 0:1], train_labels[:N])
-        scorePCA = neigh3.score(X_PCA[:, 0:1], train_labels[:N])
+        scorePCA = compute_KNN_accuracy(X_PCA[:, 0:1], train_labels[:N])
+
         chief_print(" PCA classification score: {}".format(scorePCA))
+        compute_KNN_accuracy(X_PCA[:, 0:1], train_labels[:N])
 
         N = 60000
         X_embedded = TSNE(n_components=2, learning_rate='auto',
                           init='random', perplexity=3).fit_transform(np.reshape(train_images, [num_samples, data_size**2*channels])[:N, :])
+        scoretsne = compute_KNN_accuracy(X_embedded[:, 0:1], train_labels[:N])
 
-        neigh2 = KNeighborsClassifier(n_neighbors=3)
-        neigh2.fit(X_embedded[:, 0:1], train_labels[:N])
-        scoretsne = neigh2.score(X_embedded[:, 0:1], train_labels[:N])
+
         chief_print(" t-SNE classification score: {}".format(scoretsne))
 
         plt.figure()

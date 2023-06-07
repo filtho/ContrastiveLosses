@@ -125,6 +125,10 @@ class ContrastiveLoss():
 
         return 1
 
+    def compute_loss(self, anchors,positives, negative_pool):
+
+        exit("function compute_loss not implemented for the base class.")
+        return -1
 
 class Triplet_loss(ContrastiveLoss):
     

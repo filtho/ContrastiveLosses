@@ -7,7 +7,7 @@ From: nvcr.io/nvidia/tensorflow:23.04-tf2-py3
     pip install --upgrade pip
     pip install docopt
     pip install grpcio
-    pip install scikit-learn==1.0.2
+    pip install scikit-learn==1.2.2
     pip install matplotlib==3.5.2
     pip install seaborn==0.11.2
     pip install scipy==1.4.1
