@@ -29,7 +29,7 @@ def random_negatives(anchors, negative_pool, n_pairs):
     """
     Draws n_pairs negative samples randomly from the negative pool for each samples in anchors.
     """
-    n = tf.math.minimum(tf.shape(anchors)[0], tf.shape(negative_pool)[0])
+    n = tf.shape(negative_pool)[0]
     n_pairs = tf.minimum(n_pairs, n - 1)
 
     indices = tf.random.uniform(shape=[tf.shape(anchors)[0], n_pairs], minval=0, maxval=tf.shape(negative_pool)[0],
@@ -38,7 +38,7 @@ def random_negatives(anchors, negative_pool, n_pairs):
     
     return N
 
-def negatives_by_distance_random(anchors, negative_pool, n_pairs):
+def negatives_by_distance_random(anchors, negative_pool, n_pairs, alpha = 2):
     """
     Draws n_pairs negative samples from the negative_pool for each sample in anchors. Choice is done by drawing them at random, with weights corresponding to the inverse distance.
     """
@@ -46,7 +46,7 @@ def negatives_by_distance_random(anchors, negative_pool, n_pairs):
     n = tf.math.minimum(tf.shape(anchors)[0], tf.shape(negative_pool)[0])
     n_pairs = tf.minimum(n_pairs, n - 1)
 
-    distances = distance_matrix(anchors, negative_pool)
+    distances = distance_matrix(anchors, negative_pool)**alpha
 
     I = tf.eye(tf.shape(distances)[0], tf.shape(distances)[1])
     logodds = tf.math.log((distances + I) ** -1 - I)
@@ -62,11 +62,11 @@ def negatives_by_distance(anchors, negative_pool, n_pairs):
     Choice is done by drawing only the n_pairs closest ones.
     """
 
-
+    
     n = tf.math.minimum(tf.shape(anchors)[0], tf.shape(negative_pool)[0])
     n_pairs = tf.minimum(n_pairs, n - 1)
 
-    distances = distance_matrix(anchors, tf.concat([anchors,anchors], axis = 0))
+    distances = distance_matrix(anchors, negative_pool)
     argsorted_indices = tf.argsort(distances, axis=1, direction="ASCENDING")
     indices = argsorted_indices[:,1:n_pairs+1]
     N = tf.gather(params = negative_pool, indices = indices)
@@ -121,9 +121,7 @@ class ContrastiveLoss():
         global_positives = tf.distribute.get_replica_context().all_gather(positives, axis = 0)
         return global_anchors, global_positives
 
-    def loss(self,A,P,N):
 
-        return 1
 
     def compute_loss(self, anchors,positives, negative_pool):
 
@@ -132,7 +130,7 @@ class ContrastiveLoss():
 
 class Triplet_loss(ContrastiveLoss):
     
-    def __init__(self, alpha = 1, mode = 'random', distance ="L2"):
+    def __init__(self, alpha = 1., mode = 'random', distance ="L2"):
         self.alpha = alpha
         self.mode = mode
 
@@ -148,7 +146,6 @@ class Triplet_loss(ContrastiveLoss):
 
     def compute_loss(self, anchors, positives, negative_pool):
         
-
         negatives = tf.squeeze(self.generate_negatives(anchors, negative_pool), axis = 1)
 
         anchor_pos = self.distance(anchors, positives)
@@ -211,14 +208,13 @@ class centroid_loss(ContrastiveLoss):
         max_vec = tf.tile(tf.reduce_max(tf.stack(
             [tf.reduce_sum(AC ** 2, axis=-1), tf.reduce_sum(NC ** 2, axis=-1), tf.reduce_sum(PC ** 2, axis=-1)], axis=-1),
             axis=-1)[:, :, tf.newaxis], [1, 1, tf.shape(anchors)[1]])
-            
+        
+        eps = 1e-12
 
-        num = tf.reduce_sum(max_vec ** -1 * AC * NC, axis=2)
-        denom = tf.reduce_sum(max_vec ** -1 * AC *PC, axis=2)
+        num = tf.reduce_sum(AC * NC / (max_vec+eps), axis=2)
+        denom = tf.reduce_sum(AC *PC / (max_vec+eps), axis=2)
 
         m = tf.reduce_max(tf.stack([num, denom], axis=-1), axis=-1)
-
-        eps = 1e-12
 
         loss = 1 / tf.cast(n, tf.float32) * tf.reduce_sum(tf.math.log(
             1 + tf.reduce_sum(-tf.math.exp(-2.) + tf.math.exp(num - m) / (tf.math.exp(denom - m) + eps), axis=1)))
