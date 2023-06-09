@@ -399,10 +399,6 @@ if __name__ == '__main__':
         local_batch_size = 200
         batch_size = local_batch_size * num_devices
         num_samples =  train_images.shape[0]
-        loss = []
-        times = []
-        epoch_vec = []
-
 
         ds = tf.data.Dataset.from_tensor_slices((train_images, train_labels))
         ds = ds.shuffle(train_images.shape[0], reshuffle_each_iteration = True)
@@ -513,18 +509,21 @@ if __name__ == '__main__':
                
            
             #chief_print("Epoch {}, loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
-            chief_print(f"Epoch {e}, Loss: {a/num_samples}, time: {time.perf_counter()-t0}") # , loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
+            t1 = time.perf_counter()-t0
+            chief_print(f"Epoch {e}, Loss: {a/num_samples}, time: {t1}") # , loss:  {}, learning rate: {} time: {}".format(e, a/num_samples,optimizer._current_learning_rate.numpy() , time.perf_counter() - t ))# optimizer._decayed_lr(var_dtype=tf.float32).numpy()))
 
 
             if _isChief():
                 write_to_csv(save_dir+"stats/loss.csv", a, e)
+                write_to_csv(save_dir+"stats/time.csv", t1, e)
+
                 weights_file_prefix = save_dir+'saved_model/epoch_{}'.format(e)
                 plt.figure()
                 loss_plot =pd.read_csv(save_dir + "/stats/loss.csv",header = None).to_numpy()
                 plt.plot(loss_plot[:,0], loss_plot[:,1])
                 plt.savefig(save_dir + "/stats/loss.pdf")
-
                 plt.close()
+  
             else:
                 weights_file_prefix ="/scratch/local/"+ str(e)+os.environ["SLURM_PROCID"] # Save to some junk directory, /scratch/local on Berra is a temp directory that deletes files after job is done.
             
@@ -532,14 +531,7 @@ if __name__ == '__main__':
                 chief_print("saving model at epoch {}".format(e))
                 encoder.save_weights(weights_file_prefix)
 
-            loss.append(a)
-            times.append(time.perf_counter()-t0)
-            epoch_vec.append(e)
-
-            plt.figure()
-            plt.plot(epoch_vec, loss)
-            plt.savefig(save_dir+"loss.pdf")
-            plt.close()
+           
         if profile: tf.profiler.experimental.stop()
 
 
@@ -585,24 +577,25 @@ if __name__ == '__main__':
                             hue_order=plot_labels)  # ,# = emb.numpy()[:, 0], y = emb.numpy()[:, 1], hue = np.array(color_list)[train_labels[samples_to_plot*ii:samples_to_plot*(ii+1)]], legend='brief')
 
             plt.legend(fontsize='x-small', title_fontsize='40')
+            score = compute_KNN_accuracy(full_emb, labels)
 
-            plt.title("Contrastive Learning on " +dataset+ " "  +epoch)
+            plt.title(f"Contrastive Learning on {dataset} {epoch } KNN classification accuracy: {score}")
             plt.savefig(save_dir+dataset +"_"+epoch+".png")
             plt.close()
 
-        score = compute_KNN_accuracy(full_emb, labels)
         chief_print("3 Nearest neighbour classification score: {}".format(score))
 
         pca = PCA(n_components=2)
         pca.fit(np.reshape(train_images, [num_samples, data_size**2*channels])[:num_samples, :])
         X_PCA = pca.transform(np.reshape(train_images, [num_samples, data_size**2*channels])[:num_samples, :])
         plt.figure()
+        scorePCA = compute_KNN_accuracy(X_PCA[:, 0:1], train_labels[:N])
 
         D = pd.DataFrame({"x": X_PCA[:, 0], "y": X_PCA[:, 1], "color": train_labels})
         sns.scatterplot(data=D, x="x", y="y", hue="color", palette=sns.color_palette("tab10"), legend="brief")
+        plt.title(f"PCA, KNN classification accuracy: {scorePCA}")
         plt.savefig(save_dir+"pca.pdf")
 
-        scorePCA = compute_KNN_accuracy(X_PCA[:, 0:1], train_labels[:N])
 
         chief_print(" PCA classification score: {}".format(scorePCA))
         compute_KNN_accuracy(X_PCA[:, 0:1], train_labels[:N])
@@ -618,5 +611,7 @@ if __name__ == '__main__':
         plt.figure()
         D = pd.DataFrame({"x": X_embedded[:, 0], "y": X_embedded[:, 1], "color": train_labels})
         sns.scatterplot(data=D, x="x", y="y", hue="color", palette=sns.color_palette("tab10"), legend="brief")
+        plt.title(f"tsne, KNN classification accuracy: {scoretsne}")
+
         plt.savefig(save_dir+"tsne.pdf")
         
