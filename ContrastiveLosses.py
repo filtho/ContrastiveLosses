@@ -10,13 +10,13 @@ def gumbel_max(logits, K):
         _, indices = tf.nn.top_k(logits + z, K)
         return indices
 
-
+@tf.function
 def lp_distance(x,y,p):
     """ 
     Compute the pairwise L_p distance between x and y. Assumes that x and y are ordered as [samples, embedding_dimension]
     """
     return tf.reduce_sum( (x-y)**p , axis = 1)
-
+@tf.function
 def distance_matrix(x,y):
     """ 
     Compute the pairwise L_2 distance for all pairs in x and y. Assumes that x and y are ordered as [samples, embedding_dimension]
@@ -24,7 +24,7 @@ def distance_matrix(x,y):
 
     return  tf.sqrt(tf.reduce_sum((x[:,:,tf.newaxis] - tf.transpose(y[:,:,tf.newaxis]))**2,axis = 1))
 
-
+@tf.function
 def random_negatives(anchors, negative_pool, n_pairs):
     """
     Draws n_pairs negative samples randomly from the negative pool for each samples in anchors.
@@ -37,7 +37,7 @@ def random_negatives(anchors, negative_pool, n_pairs):
     N = tf.gather(params=negative_pool, indices=indices)
     
     return N
-
+@tf.function
 def negatives_by_distance_random(anchors, negative_pool, n_pairs, alpha = 2):
     """
     Draws n_pairs negative samples from the negative_pool for each sample in anchors. Choice is done by drawing them at random, with weights corresponding to the inverse distance.
@@ -55,7 +55,7 @@ def negatives_by_distance_random(anchors, negative_pool, n_pairs, alpha = 2):
 
     return N
 
-
+@tf.function
 def negatives_by_distance(anchors, negative_pool, n_pairs):
     """
     Draws n_pairs negative samples from the negative_pool for each sample in anchors.
@@ -72,7 +72,6 @@ def negatives_by_distance(anchors, negative_pool, n_pairs):
     N = tf.gather(params = negative_pool, indices = indices)
 
     return N
-
 
 def generate_negatives(mode, n_pairs):
 
@@ -143,7 +142,7 @@ class Triplet_loss(ContrastiveLoss):
             exit("Currently only supports L1 and L2 distances.")
 
         self.generate_negatives = generate_negatives(mode = mode, n_pairs = 1)
-
+    @tf.function
     def compute_loss(self, anchors, positives, negative_pool):
         
         negatives = tf.squeeze(self.generate_negatives(anchors, negative_pool), axis = 1)
@@ -171,7 +170,7 @@ class centroid_loss(ContrastiveLoss):
 
 
         self.generate_negatives = generate_negatives(mode = mode, n_pairs = n_pairs)
-
+    @tf.function
     def compute_loss(self,anchors, positives, negative_pool):
         """
         This loss should have only 2D output, and no L2 normalization on the output.

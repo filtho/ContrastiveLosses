@@ -1,7 +1,7 @@
 """ Contrastive Losses
 
 Usage:
-  run_CL.py train --data=<name> --dir=<name> [--load_path=<name>]
+  run_CL.py train --data=<name> --dir=<name> [--load_path=<name> --config=<name>]
   run_CL.py plot --data=<name> --dir=<name> [--load_path=<name>]
 
 Options:
@@ -35,6 +35,7 @@ import pandas as pd
 from sklearn.manifold import TSNE
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.decomposition  import PCA
+from sklearn.cluster import KMeans
 import ContrastiveLosses as CL
 from set_tf_config_berzelius import set_tf_config
 import json
@@ -66,7 +67,7 @@ def write_to_csv(destination, values, epoch_number):
     Appends the value in values and the current epoch to the csv file specified in destination.
     """
     if _isChief():
-        values_write = tf.concat([tf.reshape(tf.convert_to_tensor(tf.cast(epoch_number,tf.float32)), [1, 1]), tf.reshape(tf.cast(values, tf.float32),[1,1])],axis = 1).numpy()[0]
+        values_write = tf.concat([tf.reshape(tf.convert_to_tensor(tf.cast(epoch_number,tf.float32)), [1, 1]), tf.reshape(tf.cast(values, tf.float32),[1,tf.shape(values)[0]])],axis = 1).numpy()[0]
 
         with open(destination, 'a', newline='',  encoding="utf-8") as fd:
             writer = csv.writer(fd)
@@ -82,6 +83,36 @@ def compute_KNN_accuracy(data, labels, k = 3):
     score = knn.score(data,labels)
 
     return score
+
+def k_means_clustering(data, n, labels, plot_labels = []):
+    """
+   
+    Assuming that data contains the coordinates for the samples, in the format [n_samples, dimension]
+    """
+
+    kmeans = KMeans(n_clusters = n, n_init = "auto").fit(data)
+    
+    labels_to_plot = tf.zeros((10000,),dtype = tf.int32)
+
+    for i in range(10):
+        inds = tf.where(kmeans.labels_ == i)
+        vals = tf.squeeze(tf.gather(labels, inds))
+        x, _, count = tf.unique_with_counts(vals)
+        labels_to_plot+=tf.scatter_nd(inds, tf.ones_like(vals,dtype = tf.int32) * tf.cast(x[tf.argmax(count)],tf.int32), shape =tf.constant([10000],dtype= tf.int64) )
+
+
+    acc = tf.reduce_sum(tf.cast(tf.squeeze(labels_to_plot) == tf.squeeze(tf.cast(labels,tf.int32)), tf.int32))/10000
+    D = pd.DataFrame({"x": data[:, 0], "y": data[:, 1], "label": labels_to_plot.numpy().astype(str)})
+    plt.figure()
+    sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"), legend="brief",hue_order = plot_labels)  
+    plt.title("Epoch: {}".format(e))
+    plt.legend(fontsize='x-small', title_fontsize='40')
+    plt.savefig(save_dir+"k-means_clustering_epoch: {}.pdf".format(e))
+    plt.close()
+
+    
+    return acc
+
 
 
 
@@ -244,21 +275,25 @@ if __name__ == '__main__':
             x = tf.keras.layers.Dense(75, activation="relu")(x)
             x = tf.keras.layers.Dense(75, activation="relu")(x)
             x = tf.keras.layers.Dense(75, activation="relu")(x)
-
             x = tf.keras.layers.Dense(75, activation="relu")(x)
             x = tf.keras.layers.Dense(75)(x)
 
             outputs = tf.keras.layers.Dense(2)(x)
-            outputs = tf.keras.layers.GaussianNoise(stddev=1)(outputs) # 4.66
-            self.model = tf.keras.Model(inputs=inputs, outputs=outputs, name="Model")
+            outputs = tf.keras.layers.GaussianNoise(stddev=2/9)(outputs) # 4.66
+            self.model = tf.keras.Model(inputs=inputs, outputs=(outputs, x), name="Model")
 
-        def call(self, inputs):
-            encoding = self.model(inputs)
+        def call(self, inputs, repr = False):
+            encoding, x = self.model(inputs)
             reg_loss = 1e-7 * tf.reduce_sum(tf.math.maximum(0., tf.square(encoding) - 1 * 40000.))
 
             self.add_loss(reg_loss)
 
-            return self.model(inputs)
+
+            if repr:
+                return encoding, x
+            else:
+                return encoding
+
         def augmentation(self,inputs):
 
 
@@ -356,13 +391,36 @@ if __name__ == '__main__':
                 
                 return agg_loss
 
+            if arguments["--config"]:
 
-            #loss_func = CL.Triplet_loss(alpha = 1,mode = 'random', distance = "L2")
-            loss_func = CL.centroid_loss(n_pairs = 20,mode = 'distance_weighted_random', distance = "L2")
+                with open(arguments["--config"]) as config_file:
+                    config = json.load(config_file)
+		                        
+                loss_def = config["loss"]
 
-            
+                loss_class = getattr(eval(loss_def["module"]), loss_def["class"])
+                if "args" in loss_def.keys():
+                    loss_args = loss_def["args"]
+                else:
+                    loss_args = dict()
+                loss_func = loss_class(**loss_args)
+
+                    
+                epochs =    config["epochs"]
+                local_batch_size =  config["batch_size"]
+                batch_size = local_batch_size * num_devices
+                save_interval =  config["save_interval"]
+                learning_rate = config["learning_rate"]
+            else:
+                loss_func = CL.centroid_loss(n_pairs = 20,mode = 'distance_weighted_random', distance = "L2")
+                epochs =    100
+                local_batch_size = 200
+                batch_size = local_batch_size * num_devices
+                learning_rate = 0.1    #0.000001, #for triplet, 0.1 for scaled centroid on mnist
+                save_interval =  100
+
             schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
-                initial_learning_rate =   0.05, #0.000001, #for triplet, 0.1 for scaled centroid on mnist
+                initial_learning_rate =    learning_rate,
                 first_decay_steps = 1e5,
                 t_mul=1,
                 m_mul=.95,
@@ -380,24 +438,6 @@ if __name__ == '__main__':
                 encoder.model.summary()
 
 
-        if dataset =="mnist" or dataset=="fashion_mnist":
-            rot = tf.keras.layers.RandomRotation(factor = 0.1, interpolation = 'bilinear', fill_mode = "constant", fill_value = 0.0, )
-            shift =tf.keras.layers.RandomTranslation(0.2,0.2,fill_mode='constant',fill_value = 0)
-            zoom = tf.keras.layers.RandomZoom(height_factor = [0.,0.7],width_factor=[0.,0.7],fill_mode='constant',interpolation='bilinear',seed=None,fill_value=0.0,)
-            contrast = tf.keras.layers.RandomContrast(factor=0.4)
-            flip = tf.keras.layers.RandomFlip(mode="horizontal")
-        elif dataset == "cifar10":
-            rot = tf.keras.layers.RandomRotation(factor=0.1, interpolation='bilinear')
-            shift = tf.keras.layers.RandomTranslation(0.1, 0.1, fill_mode='nearest', fill_value=0)
-            zoom = tf.keras.layers.RandomZoom(height_factor=[-0.3, -0.1], width_factor=[-0.3, -0.1], fill_mode='constant',
-                                              interpolation='bilinear', seed=None, fill_value=0.0, )
-            contrast = tf.keras.layers.RandomContrast(factor=0.4)
-            flip = tf.keras.layers.RandomFlip(mode="horizontal")
-            #brightness = tf.keras.layers.RandomBrightness(factor = 0.0, value_range = (0,1))
-
-        epochs =    100
-        local_batch_size = 200
-        batch_size = local_batch_size * num_devices
         num_samples =  train_images.shape[0]
 
         ds = tf.data.Dataset.from_tensor_slices((train_images, train_labels))
@@ -432,44 +472,47 @@ if __name__ == '__main__':
                 
                 validation_embedding = None
                 validation_labels = None
+                validation_higher_dim= None
 
                 for valid_image, valid_label in ds_validation:
 
-                    emb = encoder(valid_image, training = False)
+                    emb, higher_dim = encoder(valid_image, training = False, repr = True)
                     if validation_embedding == None:
-                        validation_embedding =emb
+                        validation_embedding = emb
                         validation_labels = valid_label
+                        validation_higher_dim = higher_dim
+
                     else:
                                 
                         validation_embedding = tf.concat([validation_embedding, emb], axis = 0)
                         validation_labels = tf.concat([validation_labels, valid_label], axis = 0)
- 
-                acc = compute_KNN_accuracy(validation_embedding, validation_labels)
+                        validation_higher_dim = tf.concat([validation_higher_dim, higher_dim], axis = 0)
 
-                write_to_csv(save_dir+"/stats/KNN_acc.csv",acc,e)
+                acc = compute_KNN_accuracy(validation_embedding, validation_labels)
+                acc2 = compute_KNN_accuracy(validation_higher_dim, validation_labels)
+
+                write_to_csv(save_dir+"/stats/KNN_acc.csv",[acc,acc2],e)
 
 
                 if  _isChief():
-                    plt.figure()
-                    ax = plt.gca()
 
+                    plt.figure()
                     D = pd.DataFrame({"x": validation_embedding[:, 0], "y": validation_embedding[:, 1], "label": validation_labels.numpy().astype(str)})
                     sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"), legend="brief",hue_order = plot_labels)  
-
-
                     plt.title("Epoch: {}".format(e))
                     plt.legend(fontsize='x-small', title_fontsize='40')
-
                     plt.savefig(save_dir+"Epoch: {}.pdf".format(e))
                     plt.close()
                     plt.figure()
                     acc_plot =pd.read_csv(save_dir + "/stats/KNN_acc.csv",header = None).to_numpy()
-                    plt.plot(acc_plot[:,0], acc_plot[:,1])
+                    plt.plot(acc_plot[:,0], acc_plot[:,1], label = "2-D embedding")
+                    plt.plot(acc_plot[:,0], acc_plot[:,2], label = "High-D representation")
+                    plt.legend()
                     plt.savefig(save_dir + "/stats/KNN_acc.pdf")
                     plt.close()
 
 
-                chief_print(f" KNN classification accuracy on the validation dataset: {acc}")
+                chief_print(f" KNN classification accuracy on the validation dataset: {acc}, on higher dim : {acc2}")
 
                 
             t0 = time.perf_counter()
@@ -514,8 +557,8 @@ if __name__ == '__main__':
 
 
             if _isChief():
-                write_to_csv(save_dir+"stats/loss.csv", a, e)
-                write_to_csv(save_dir+"stats/time.csv", t1, e)
+                write_to_csv(save_dir+"stats/loss.csv", [a], e)
+                write_to_csv(save_dir+"stats/time.csv", [t1], e)
 
                 weights_file_prefix = save_dir+'saved_model/epoch_{}'.format(e)
                 plt.figure()
@@ -527,9 +570,11 @@ if __name__ == '__main__':
             else:
                 weights_file_prefix ="/scratch/local/"+ str(e)+os.environ["SLURM_PROCID"] # Save to some junk directory, /scratch/local on Berra is a temp directory that deletes files after job is done.
             
-            if e % 100 ==0:
+            if e % save_interval ==0:
                 chief_print("saving model at epoch {}".format(e))
                 encoder.save_weights(weights_file_prefix)
+                k_means_clustering(validation_embedding,n = 10, labels = validation_labels, plot_labels=plot_labels)
+
 
            
         if profile: tf.profiler.experimental.stop()
