@@ -84,33 +84,35 @@ def compute_KNN_accuracy(data, labels, k = 3):
 
     return score
 
-def k_means_clustering(data, n, labels, plot_labels = []):
+def k_means_clustering(data, n, labels, plot_labels = [], e = [], plot = True):
     """
    
     Assuming that data contains the coordinates for the samples, in the format [n_samples, dimension]
     """
 
     kmeans = KMeans(n_clusters = n, n_init = "auto").fit(data)
-    
-    labels_to_plot = tf.zeros((10000,),dtype = tf.int32)
+    size = tf.shape(data)[0].numpy()
+    tf.print(size)
+    labels_to_plot = tf.zeros((size,),dtype = tf.int32)
 
     for i in range(10):
         inds = tf.where(kmeans.labels_ == i)
         vals = tf.squeeze(tf.gather(labels, inds))
         x, _, count = tf.unique_with_counts(vals)
-        labels_to_plot+=tf.scatter_nd(inds, tf.ones_like(vals,dtype = tf.int32) * tf.cast(x[tf.argmax(count)],tf.int32), shape =tf.constant([10000],dtype= tf.int64) )
+        labels_to_plot+=tf.scatter_nd(inds, tf.ones_like(vals,dtype = tf.int32) * tf.cast(x[tf.argmax(count)],tf.int32), shape =tf.constant([size],dtype= tf.int64) )
 
 
-    acc = tf.reduce_sum(tf.cast(tf.squeeze(labels_to_plot) == tf.squeeze(tf.cast(labels,tf.int32)), tf.int32))/10000
-    D = pd.DataFrame({"x": data[:, 0], "y": data[:, 1], "label": labels_to_plot.numpy().astype(str)})
-    plt.figure()
-    sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"), legend="brief",hue_order = plot_labels)  
-    plt.title("Epoch: {}".format(e))
-    plt.legend(fontsize='x-small', title_fontsize='40')
-    plt.savefig(save_dir+"k-means_clustering_epoch: {}.pdf".format(e))
-    plt.close()
+    acc = tf.reduce_sum(tf.cast(tf.squeeze(labels_to_plot) == tf.squeeze(tf.cast(labels,tf.int32)), tf.int32))/size
+    if plot:
 
-    
+        D = pd.DataFrame({"x": data[:, 0], "y": data[:, 1], "label": tf.gather(plot_labels, tf.cast(labels_to_plot,tf.int32)).numpy().astype(str)})
+        plt.figure()
+        sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"), legend="brief",hue_order = plot_labels)  
+        plt.title("Epoch: {}".format(e))
+        plt.legend(fontsize='x-small', title_fontsize='40')
+        plt.savefig(save_dir+"k-means_clustering_epoch: {}.pdf".format(e))
+        plt.close()
+
     return acc
 
 
@@ -297,13 +299,23 @@ if __name__ == '__main__':
         def augmentation(self,inputs):
 
 
-            if arguments["--data"]=="mnist" or arguments["--data"]=="fashion_mnist":
+            if arguments["--data"]=="mnist" :
                 rot = tf.keras.layers.RandomRotation(factor = 0.1, interpolation = 'bilinear', fill_mode = "constant", fill_value = 0.0)
                 shift =tf.keras.layers.RandomTranslation(0.2,0.2,fill_mode='constant',fill_value = 0)
                 zoom = tf.keras.layers.RandomZoom(height_factor = [0.,0.7],width_factor=[0.,0.7],fill_mode='constant',interpolation='bilinear',seed=None,fill_value=0.0, )
 
                 inputs2 = dret()(inputs)
                 x = shift(rot(zoom(inputs2)))
+
+            elif arguments["--data"]=="fashion_mnist":
+                rot = tf.keras.layers.RandomRotation(factor = 0.1, interpolation = 'bilinear', fill_mode = "constant", fill_value = 0.0)
+                shift =tf.keras.layers.RandomTranslation(0.2,0.2,fill_mode='constant',fill_value = 0)
+                zoom = tf.keras.layers.RandomZoom(height_factor = [0.,0.7],width_factor=[0.,0.7],fill_mode='constant',interpolation='bilinear',seed=None,fill_value=0.0, )
+                flip = tf.keras.layers.RandomFlip(mode="horizontal")
+
+                inputs2 = dret()(inputs)
+                x = shift(rot(zoom(flip(inputs2))))
+
             elif arguments["--data"]=="cifar10":
                 rot = tf.keras.layers.RandomRotation(factor=0.1, interpolation='bilinear')
                 shift = tf.keras.layers.RandomTranslation(0.1, 0.1, fill_mode='nearest', fill_value=0)
@@ -493,11 +505,14 @@ if __name__ == '__main__':
 
                 write_to_csv(save_dir+"/stats/KNN_acc.csv",[acc,acc2],e)
 
-
+                #tf.print(validation_labels)
+                #tf.print(train_labels)
+                #tf.print(tf.gather(plot_labels, tf.cast(validation_labels,tf.int32)))
                 if  _isChief():
+                    
 
                     plt.figure()
-                    D = pd.DataFrame({"x": validation_embedding[:, 0], "y": validation_embedding[:, 1], "label": validation_labels.numpy().astype(str)})
+                    D = pd.DataFrame({"x": validation_embedding[:, 0], "y": validation_embedding[:, 1], "label": tf.gather(plot_labels, tf.cast(validation_labels,tf.int32)).numpy().astype(str)})
                     sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"), legend="brief",hue_order = plot_labels)  
                     plt.title("Epoch: {}".format(e))
                     plt.legend(fontsize='x-small', title_fontsize='40')
@@ -573,7 +588,7 @@ if __name__ == '__main__':
             if e % save_interval ==0:
                 chief_print("saving model at epoch {}".format(e))
                 encoder.save_weights(weights_file_prefix)
-                k_means_clustering(validation_embedding,n = 10, labels = validation_labels, plot_labels=plot_labels)
+                k_means_clustering(validation_embedding,n = 10, labels = validation_labels, plot_labels=plot_labels, e = e)
 
 
            
@@ -627,6 +642,10 @@ if __name__ == '__main__':
             plt.title(f"Contrastive Learning on {dataset} {epoch } KNN classification accuracy: {score}")
             plt.savefig(save_dir+dataset +"_"+epoch+".png")
             plt.close()
+            kmeans_acc = k_means_clustering(full_emb,n = 10, labels = labels, plot_labels=plot_labels, e = epoch, plot = False)
+            
+            tf.print((f" KNN classification accuracy : {score}"))
+            tf.print((f" KMeans classification accuracy: : {kmeans_acc}"))
 
         chief_print("3 Nearest neighbour classification score: {}".format(score))
 
