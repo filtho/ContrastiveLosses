@@ -43,7 +43,7 @@ def negatives_by_distance_random(anchors, negative_pool, n_pairs, alpha = 2):
     Draws n_pairs negative samples from the negative_pool for each sample in anchors. Choice is done by drawing them at random, with weights corresponding to the inverse distance.
     """
 
-    n = tf.math.minimum(tf.shape(anchors)[0], tf.shape(negative_pool)[0])
+    n = tf.shape(negative_pool)[0]
     n_pairs = tf.minimum(n_pairs, n - 1)
 
     distances = distance_matrix(anchors, negative_pool)**alpha
@@ -155,7 +155,58 @@ class Triplet_loss(ContrastiveLoss):
         return loss
 
 
-class centroid_loss(ContrastiveLoss):
+class n_pair(ContrastiveLoss):
+    
+    def __init__(self, n_pairs = 20, alpha = 0., mode = 'distance_weighted_random', distance ="L2"):
+        self.mode = mode
+
+        self.alpha = alpha
+        if   distance == "L2":
+            self.distance = lambda A,P: lp_distance(A,P,2)
+        elif distance== "L1":
+            self.distance = lambda A,P: lp_distance(A,P,1)
+        else:
+            exit("Currently only supports L1 and L2 distances.")
+
+
+        self.generate_negatives = generate_negatives(mode = mode, n_pairs = n_pairs)
+    @tf.function
+    def compute_loss(self,anchors, positives, negative_pool):
+        """
+        Implementation of the the N-pair loss from "Improved Deep Metric Learning with Multi-class N-pair Loss Objective"
+        by Sohn, 2016
+        """
+        n =  tf.shape(anchors)[0]
+        if tf.shape(anchors)[0] == 0 or tf.shape(negative_pool)[0] == 0 :  # To not have to handle empty batches which may come up in distributed training.
+            return 0.
+        tf.print(tf.shape(negative_pool))
+        A = anchors
+        P = positives 
+        N = self.generate_negatives(anchors,negative_pool)
+
+        N_pairs = tf.shape(N)[1]
+        tf.print(tf.shape(N))
+        hehe = True
+        if hehe == False:
+            anchor_pos = tf.reduce_sum((tf.tile(A[:,tf.newaxis,:], [1, N_pairs, 1]) - tf.tile(P[:,tf.newaxis,:], [1, N_pairs, 1]))**2, axis=2)
+            anchor_neg = tf.reduce_sum((tf.tile(A[:,tf.newaxis,:], [1, N_pairs, 1]) - N)**2, axis=2)
+            
+            loss = tf.reduce_sum(tf.math.maximum( anchor_pos - anchor_neg+ self.alpha, 0 ) ) / tf.cast(N_pairs,tf.float32)
+            tf.print(loss)
+        else:
+            dot_pos = tf.reduce_sum((A * P), axis=1)
+            dot_neg = tf.reduce_sum(tf.tile(A[:,tf.newaxis,:], [1, N_pairs, 1]) * N, axis=2)
+
+            m = tf.math.maximum(dot_pos, tf.reduce_max(dot_neg,axis = -1))
+
+            pos = tf.math.exp(dot_pos -m)
+            neg = tf.reduce_sum(tf.math.exp(dot_neg-m[:,tf.newaxis]), axis=1)
+
+            loss = -tf.reduce_sum(tf.math.log(pos / (neg + pos)))
+
+        return loss
+
+class centroid(ContrastiveLoss):
     
     def __init__(self, n_pairs = 20, mode = 'distance_weighted_random', distance ="L2"):
         self.mode = mode
@@ -220,3 +271,58 @@ class centroid_loss(ContrastiveLoss):
 
 
         return loss
+
+
+class debiased_contrastive_loss(ContrastiveLoss):
+    
+    def __init__(self, n_pairs = 20, mode = 'distance_weighted_random', distance ="L2"):
+        
+        self.mode = mode
+        if   distance == "L2":
+            self.distance = lambda A,P: lp_distance(A,P,2)
+        elif distance== "L1":
+            self.distance = lambda A,P: lp_distance(A,P,1)
+        else:
+            exit("Currently only supports L1 and L2 distances.")
+
+
+        self.generate_negatives = generate_negatives(mode = mode, n_pairs = n_pairs)
+    @tf.function
+    def compute_loss(self,anchors, positives, negative_pool):
+        """
+        This implements the "Debiased contrastive loss", as presented in "Debiased Contrastive Learning", Chuang et.al. 2020.
+
+        This should essentially assume that the output is L2 normalized, that is, the output domain is on the d-dimensional hypersphere.
+        """
+        n =  tf.shape(anchors)[0]
+        if tf.shape(anchors)[0] == 0 or tf.shape(negative_pool)[0] == 0 :  # To not have to handle empty batches which may come up in distributed training.
+            return 0.
+      
+        A = anchors
+        P = positives 
+        N = self.generate_negatives(anchors,negative_pool)
+
+        tf.print(tf.shape(N))
+        N_pairs = tf.shape(N)[1] 
+        dot_pos = tf.reduce_sum((A * P), axis=1) 
+        dot_neg =tf.reduce_sum(tf.tile(A[:,tf.newaxis,:], [1, N_pairs, 1]) * N, axis=2)
+
+        m = tf.math.reduce_max([tf.reduce_max(dot_neg),tf.reduce_max(dot_pos)])
+
+        neg = tf.reduce_sum(tf.math.exp(dot_neg-m), axis=1)
+        pos = tf.math.exp(dot_pos-m)
+
+        tau_plus = 0.01
+        t = 1.
+        eps = 1e-12
+        N_pairs2 = tf.cast(N_pairs, tf.float32)
+
+
+        Ng = tf.math.maximum( (-N_pairs2 * tau_plus * pos +neg) / (1-tau_plus), N_pairs2* tf.math.exp(-1/t-m))
+        debiased_loss = -tf.reduce_sum(tf.math.log(pos / (pos+ Ng+ eps )))
+
+        return debiased_loss
+
+
+
+

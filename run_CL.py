@@ -39,6 +39,7 @@ from sklearn.cluster import KMeans
 import ContrastiveLosses as CL
 from set_tf_config_berzelius import set_tf_config
 import json
+from keras import backend as K
 sns.set()
 
 
@@ -92,7 +93,6 @@ def k_means_clustering(data, n, labels, plot_labels = [], e = [], plot = True):
 
     kmeans = KMeans(n_clusters = n, n_init = "auto").fit(data)
     size = tf.shape(data)[0].numpy()
-    tf.print(size)
     labels_to_plot = tf.zeros((size,),dtype = tf.int32)
 
     for i in range(10):
@@ -105,8 +105,33 @@ def k_means_clustering(data, n, labels, plot_labels = [], e = [], plot = True):
     acc = tf.reduce_sum(tf.cast(tf.squeeze(labels_to_plot) == tf.squeeze(tf.cast(labels,tf.int32)), tf.int32))/size
     if plot:
 
-        D = pd.DataFrame({"x": data[:, 0], "y": data[:, 1], "label": tf.gather(plot_labels, tf.cast(labels_to_plot,tf.int32)).numpy().astype(str)})
+        # below is taken from https://scikit-learn.org/stable/auto_examples/cluster/plot_kmeans_digits.html#sphx-glr-auto-examples-cluster-plot-kmeans-digits-py
+        h = 0.02 
+        # Plot the decision boundary. For that, we will assign a color to each
+        x_min, x_max = tf.reduce_min(data[:, 0]) - 1, tf.reduce_max(data[:, 0])+ 1
+        y_min, y_max = tf.reduce_min(data[:, 1]) - 1, tf.reduce_max(data[:, 1]) + 1
+        xx, yy = np.meshgrid(np.arange(x_min, x_max, h), np.arange(y_min, y_max, h))
         plt.figure()
+
+        # Obtain labels for each point in mesh. Use last trained model.
+        Z = kmeans.predict(np.c_[xx.ravel(), yy.ravel()])
+
+        # Put the result into a color plot
+        Z = Z.reshape(xx.shape)
+        plt.figure(1)
+        plt.clf()
+        plt.imshow(
+        Z,
+        interpolation="nearest",
+        extent=(xx.min(), xx.max(), yy.min(), yy.max()),
+        cmap=plt.cm.Paired,
+        aspect="auto",
+        origin="lower",
+        )
+
+
+
+        D = pd.DataFrame({"x": data[:, 0], "y": data[:, 1], "label": tf.gather(plot_labels, tf.cast(labels_to_plot,tf.int32)).numpy().astype(str)})
         sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"), legend="brief",hue_order = plot_labels)  
         plt.title("Epoch: {}".format(e))
         plt.legend(fontsize='x-small', title_fontsize='40')
@@ -253,6 +278,21 @@ if __name__ == '__main__':
             else:
                 return inputs
 
+
+    class SnP(tf.keras.layers.Layer):
+        """
+        Salt and pepper noise, adapted from https://stackoverflow.com/questions/55653940/how-do-i-implement-salt-pepper-layer-in-keras """
+        def call(self,inputs, training = True):
+            
+            def noised():
+                shp = K.shape(inputs)[1:]
+                mask_select = K.random_bernoulli(shape=shp, p=0.1)
+                mask_noise = K.random_bernoulli(shape=shp, p=0.5) # salt and pepper have the same chance
+                out = inputs * (1-mask_select) + mask_noise * mask_select
+                return out
+
+            return K.in_train_phase(noised(), inputs, training=training)
+    
     class Encoder(tf.keras.Model):
         """ A class defining the model architecture, and the call logic."""
 
@@ -286,7 +326,12 @@ if __name__ == '__main__':
 
         def call(self, inputs, repr = False):
             encoding, x = self.model(inputs)
-            reg_loss = 1e-7 * tf.reduce_sum(tf.math.maximum(0., tf.square(encoding) - 1 * 40000.))
+            
+            
+            reg_loss = 1e-1 * tf.reduce_sum(tf.math.maximum(0., tf.square(encoding) - 1 * 40000.) / 40000.) / tf.cast(tf.shape(encoding)[0], tf.float32)
+            #reg_loss = 1e-1 * tf.reduce_sum(tf.math.maximum(0., tf.square(encoding[:,0]) - 1 * 250000.)/250000.+ tf.math.maximum(0., tf.square(encoding[:,1]) -  40000.) / 40000.) / tf.cast(tf.shape(encoding)[0], tf.float32)
+
+
 
             self.add_loss(reg_loss)
 
@@ -305,7 +350,7 @@ if __name__ == '__main__':
                 zoom = tf.keras.layers.RandomZoom(height_factor = [0.,0.7],width_factor=[0.,0.7],fill_mode='constant',interpolation='bilinear',seed=None,fill_value=0.0, )
 
                 inputs2 = dret()(inputs)
-                x = shift(rot(zoom(inputs2)))
+                x = SnP()(shift(rot(zoom(inputs2))))
 
             elif arguments["--data"]=="fashion_mnist":
                 rot = tf.keras.layers.RandomRotation(factor = 0.1, interpolation = 'bilinear', fill_mode = "constant", fill_value = 0.0)
@@ -505,11 +550,7 @@ if __name__ == '__main__':
 
                 write_to_csv(save_dir+"/stats/KNN_acc.csv",[acc,acc2],e)
 
-                #tf.print(validation_labels)
-                #tf.print(train_labels)
-                #tf.print(tf.gather(plot_labels, tf.cast(validation_labels,tf.int32)))
                 if  _isChief():
-                    
 
                     plt.figure()
                     D = pd.DataFrame({"x": validation_embedding[:, 0], "y": validation_embedding[:, 1], "label": tf.gather(plot_labels, tf.cast(validation_labels,tf.int32)).numpy().astype(str)})
@@ -540,7 +581,7 @@ if __name__ == '__main__':
                 
                 if _isChief():
                     # This can only be done on a single gpu run as of now. It dislikes transforming stuff that are already sdistributed
-                    if current_batch%(batch_size*10000) == 0: # Save image of augmented samples and where they get mapped, used in development - checking augmentations.
+                    if current_batch%(batch_size*100000) == 0: # Save image of augmented samples and where they get mapped, used in development - checking augmentations.
                         augmented_images = encoder.augmentation(input_data)
 
                         emb2 = encoder(augmented_images)
@@ -628,21 +669,22 @@ if __name__ == '__main__':
                 full_emb = np.append(full_emb, emb, axis=0)
 
 
-            D = pd.DataFrame({"x": full_emb[:, 0], "y": full_emb[:, 1], "label": tf.gather(plot_labels,
-                                                                                 tf.cast(labels,
-                                                                                         tf.int32)).numpy().astype(
-                str)})
+
+            #plt.figure(figsize=(10,5))
+            plt.figure()
+            D = pd.DataFrame({"x": full_emb[:, 0], "y": full_emb[:, 1],
+             "label": tf.gather(plot_labels,tf.cast(labels,tf.int32)).numpy().astype(str)})
             sns.scatterplot(data=D, x="x", y="y", hue="label", palette=sns.color_palette("tab10"),
                             legend="brief",
                             hue_order=plot_labels)  # ,# = emb.numpy()[:, 0], y = emb.numpy()[:, 1], hue = np.array(color_list)[train_labels[samples_to_plot*ii:samples_to_plot*(ii+1)]], legend='brief')
 
             plt.legend(fontsize='x-small', title_fontsize='40')
             score = compute_KNN_accuracy(full_emb, labels)
-
+            #plt.axis("equal")
             plt.title(f"Contrastive Learning on {dataset} {epoch } KNN classification accuracy: {score}")
             plt.savefig(save_dir+dataset +"_"+epoch+".png")
             plt.close()
-            kmeans_acc = k_means_clustering(full_emb,n = 10, labels = labels, plot_labels=plot_labels, e = epoch, plot = False)
+            kmeans_acc = k_means_clustering(full_emb,n = 10, labels = labels, plot_labels=plot_labels, e = epoch, plot = True)
             
             tf.print((f" KNN classification accuracy : {score}"))
             tf.print((f" KMeans classification accuracy: : {kmeans_acc}"))
