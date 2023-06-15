@@ -24,7 +24,7 @@ def test_negatives_by_distance():
 def test_number_of_pair():
     """
     This tests that the negatives that are generated are less than number of available negatives, 
-    since we should not counta sample twice, and we assume that anchors \in negatives_pool, an anchors should not have itself as a negative.
+    since we should not count sample twice, and we assume that anchors \in negatives_pool, an anchors should not have itself as a negative.
     """
 
     anchors = tf.cast(tf.transpose(tf.convert_to_tensor([[0,1,1,2,3,4],[1,0,2,1,2,0]])), tf.float32)
@@ -49,7 +49,7 @@ def test_loss_overflow():
     anchors = tf.cast(tf.transpose(tf.convert_to_tensor([[0,1,1,2,3,4],[1,0,2,1,2,0]])), tf.float32)  
     positives = anchors+ tf.random.uniform(shape= tf.shape(anchors), minval = 0, maxval = 0.1)
 
-    CL = centroid_loss(n_pairs = 3, mode = 'distance_weighted_random', distance ="L2")
+    CL = centroid(n_pairs = 3, mode = 'distance_weighted_random', distance ="L2")
 
     loss = CL(anchors+1000000, positives)
     assert not tf.math.is_inf(loss) 
