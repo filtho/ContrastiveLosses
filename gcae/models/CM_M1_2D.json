@@ -11,7 +11,8 @@
   {"class": "Dense", "module":"tf.keras.layers", "args": {"units":75, "activation":"elu", "kernel_initializer":"slimmed"}},
   {"class": "Dropout", "module":"tf.keras.layers", "args": {"rate":0.01}},
   {"class": "Dense", "module":"tf.keras.layers", "args": {"units":75, "activation":"elu", "kernel_initializer":"slimmed"}},
-  {"class": "Dense", "module":"tf.keras.layers", "encoding" : true, "args": {"units":2, "name":"encoded"}}
+  {"class": "Dense", "module":"tf.keras.layers", "encoding" : true, "args": {"units":2,  "name":"encoded", "dtype":"float32"}}
+
 ]
 
 }

@@ -1,37 +1,41 @@
 import os
 import math
-import numpy as np
-import h5py
-import utils.normalization as normalization
-import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-import sklearn.preprocessing
+import shutil
+import time
 import random
-from scipy.spatial import ConvexHull
 import functools
-from scipy.spatial import Delaunay
 import traceback
 import sys
+import csv
+
 import tensorflow as tf
+import numpy as np
 from tensorflow import keras
+import pandas as pd
+
+import utils.normalization as normalization
+import matplotlib.pyplot as plt
+from scipy.spatial import ConvexHull
+from scipy.spatial import Delaunay
+from scipy import stats
+import h5py
+
+
+from pandas_plink import read_plink
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import f1_score
-from scipy import stats
-from pandas_plink import read_plink
-import csv
 from sklearn.neighbors import NearestCentroid
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.naive_bayes import GaussianNB
-import pyarrow.parquet as pq
-import pandas as pd
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import GaussianNB
 from pysnptools.snpreader import Bed
 import pyarrow as pa
-import shutil
-import time
-import psutil
-from utils.tfrecords_utils import write_genotypes_to_tfr_long, parse_tfr_element, get_dataset_large
+import pyarrow.parquet as pq
+
+
+from utils.tfrecords_utils import write_genotypes_to_tfr_long, get_dataset_large, write_genotypes_to_tfr_long_one_sample, get_dataset_large_mult_dir, write_genotypes_to_tfr_long_one_sample_mult_dir
 
 
 class data_generator_ae:
@@ -45,7 +49,7 @@ class data_generator_ae:
     def __init__(self,
                  filebase,
                  normalization_mode="smartPCAstyle",
-                 normalization_options={"flip": False, "missing_val": 0.0, "num_markers": 100},
+                 normalization_options=None, #{"flip": False, "missing_val": 0.0, "num_markers": 100},
                  get_genotype_data=True,
                  impute_missing=True):
         '''
@@ -64,6 +68,13 @@ class data_generator_ae:
         self.normalization_options = normalization_options
         self.train_batch_location = 0
         self.impute_missing = impute_missing
+        self.n_markers = None
+        self.sample_idx_train = None
+        self.sample_idx_valid = None
+        self.train_set_indices = None
+        self.n_valid_samples = None
+        self.n_train_samples = None
+
 
         self._define_samples()
 
@@ -435,7 +446,7 @@ def get_baseline_gc(genotypes):
 
     n_samples = float(genotypes.shape[0])
     modes = stats.mode(genotypes)
-    most_common_genos = modes.mode
+    #most_common_genos = modes.mode
     counts = modes.count
     # num with most common geno / total samples gives correctness when guessing most common for every sample
     genotype_conc_per_marker = counts / n_samples
@@ -653,7 +664,7 @@ def get_ind_pop_list_from_map(famfile, mapfile):
 
         return np.array(ind_pop_list)
 
-    except Exception as e:
+    except Exception:
         exc_str = traceback.format_exc()
         print("Error in gettinf ind pop list from map : {0}".format(exc_str))
 
@@ -668,10 +679,10 @@ def get_ind_pop_list(filestart):
     '''
     try:
         ind_pop_list = np.genfromtxt(filestart + ".fam", usecols=(1, 0), dtype=str)
-        print("Reading ind pop list from " + filestart + ".fam")
+        #print("Reading ind pop list from " + filestart + ".fam")
     except:
         ind_pop_list = np.genfromtxt(filestart + ".ind", usecols=(0, 2), dtype=str)
-        print("Reading ind pop list from " + filestart + ".ind")
+        #print("Reading ind pop list from " + filestart + ".ind")
 
         # probably not general solution
         if ":" in ind_pop_list[0][0]:
@@ -703,7 +714,7 @@ def get_unique_pop_list(filestart):
     return pop_list
 
 
-def get_coords_by_pop(filestart_fam, coords, pop_subset=None, ind_pop_list=[]):
+def get_coords_by_pop(filestart_fam, coords, pop_subset=None, ind_pop_list=None):
     '''
     Get the projected 2D coordinates specified by coords sorted by population.
 
@@ -737,6 +748,9 @@ def get_coords_by_pop(filestart_fam, coords, pop_subset=None, ind_pop_list=[]):
     coords_by_pop = {}
     for p in unique_pops:
         coords_by_pop[p] = []
+
+
+
 
     for s in range(len(coords)):
         this_pop = pop_list[s]
@@ -894,7 +908,7 @@ def genfromplink(fileprefix):
     :param fileprefix: path and filename prefix of the plink data (bed, bim, fam)
     :return:
     '''
-    (bim, fam, bed) = read_plink(fileprefix)
+    (_, _, bed) = read_plink(fileprefix)
     genotypes = bed.compute()
     genotypes[np.isnan(genotypes)] = 9.0
     return (genotypes, bed.shape[0])
@@ -935,7 +949,7 @@ def get_test_samples_stratified2(ind_pop_list, test_split):
         for pop in panel_pops:
             counter_dict[pop] = 0
 
-        for ind, pop in ind_pop_list:
+        for _, pop in ind_pop_list:
             counter_dict[pop] += 1
 
         for pop in counter_dict.keys():
@@ -1009,7 +1023,7 @@ def get_test_samples_stratified(genotypes, ind_pop_list, test_split):
         for pop in panel_pops:
             counter_dict[pop] = 0
 
-        for ind, pop in ind_pop_list:
+        for _, pop in ind_pop_list:
             counter_dict[pop] += 1
 
         for pop in counter_dict.keys():
@@ -1035,7 +1049,7 @@ def get_test_samples_stratified(genotypes, ind_pop_list, test_split):
         sample_idx = range(len(genotypes))
         genotypes_train, genotypes_test, sample_idx_train, sample_idx_test, pops_train, pops_test = train_test_split(
             genotypes, sample_idx, pop_list, test_size=test_split, stratify=pop_list, random_state=1)
-        sample_idx_train = np.array(sample_idx_train)
+        sample_idx_train = tf.convert_to_tensornp.array(sample_idx_train)
         sample_idx_test = np.array(sample_idx_test)
 
         pops_train_recon = pop_list[sample_idx_train]
@@ -1066,7 +1080,8 @@ class alt_data_generator(data_generator_ae):
 
     def __init__(self, filebase,
                  batch_size, normalization_mode="genotypewise01", recombination_rate=0.0, generations=0,
-                 normalization_options={"flip": False, "missing_val": -1.0, "num_markers": None}, impute_missing=True,
+                 normalization_options=None,# {"flip": False, "missing_val": -1.0, "num_markers": None},
+                 impute_missing=True,
                  sparsifies=False, only_recomb=False, contrastive= False, n_samples = -1, decode_only = False):
 
         self.contrastive = contrastive
@@ -1084,13 +1099,21 @@ class alt_data_generator(data_generator_ae):
         self.generations_left = self.generations
         self.marker_count()  # This sets the number of markers
         self.only_recomb = only_recomb
-
+        self.n_train_samples_last_batch = None
+        self.n_valid_samples_last_batch = None
+        self.project = None
+        self.missing_mask_input = None
+        self.scaler = StandardScaler()
+        self.most_common_genos = None
+        self.baseline_concordance_pop_informed = None
+        self.baseline_concordance_superpop_informed = None
+        self.baseline_concordance = None
+        self.baseline_concordances_k_mer = None
         if decode_only:
             # need to define the encoded values from which we want to reconstruct orignal data.
             # Pass this as some sort of argument in the future.
 
             #this is hardcoded, saved from MATLAB.
-
             self.saved_encoded_data = tf.convert_to_tensor(pd.read_csv("encoded_data_from_TSNE_HO2067.csv",header = None).to_numpy())
 
 
@@ -1112,7 +1135,7 @@ class alt_data_generator(data_generator_ae):
 
         else:
             self.recombination = True
-            self.total_batch_size = batch_size + np.int(np.ceil(self.recombination_rate * self.batch_size))
+            self.total_batch_size = batch_size + tf.cast(tf.math.ceil(self.recombination_rate * self.batch_size), tf.int32)
             # Initialize some snp-related data, such as the chromosomes and the centimorgan distances
             self.get_chromosome_data()
 
@@ -1172,38 +1195,32 @@ class alt_data_generator(data_generator_ae):
 
         """
 
-        # TODO: There seems to be an issue where (in the very rare case) that when n_valid_batches % batch_size = 0, it sends a last batch with 0 samples, which is not good. Fix this sometime, meanwhile, just choose another set of parameters.
-
         if training:
             training = True
             n_samples = self.n_train_samples
-            recomb_rate = self.recombination_rate
             # This yields randomized chunks and batches for each epoch. Essentially shuffling the samples
             if shuffle:
                 indices = tf.random.shuffle(self.sample_idx_train)
             else:
-                indices = self.sample_idx_train[np.arange(0, n_samples)]
+                indices = tf.convert_to_tensor(self.sample_idx_train)[:n_samples]
 
         elif not training:
             training = False
             n_samples = self.n_valid_samples
-            recomb_rate = 0
             if shuffle:
                 indices = tf.random.shuffle(self.sample_idx_valid)
             else:
-                indices = self.sample_idx_valid[np.arange(0, n_samples)]
+                indices = tf.convert_to_tensor(self.sample_idx_train)[:n_samples]
 
-        recombined_samples_per_batch = np.int(
-            np.ceil(recomb_rate * self.batch_size))  # fixed number of samples that we just append
 
         chunk_size = pref_chunk_size // self.batch_size * self.batch_size  # Make the preferred chunk size an integer multiple of the batch size
-        num_chunks = np.ceil(n_samples / chunk_size)
+        num_chunks = math.ceil(n_samples / chunk_size)
         chunks_read = 0
         indices = tf.cast(indices, tf.int32)
         while chunks_read < num_chunks:
 
             chunk_indices = indices[chunk_size * chunks_read: chunk_size * (chunks_read + 1)]
-            batches_per_chunk = np.ceil(len(chunk_indices) / self.batch_size)
+            batches_per_chunk = tf.math.ceil(tf.shape(chunk_indices)[0] / self.batch_size)
             if self.recombination and training:
                 par_inds = tf.random.uniform(
                     (tf.cast(self.n_parent_samples() * batches_per_chunk, tf.int32),), minval=0,
@@ -1248,18 +1265,32 @@ class alt_data_generator(data_generator_ae):
                 chunk_indices = tf.concat([chunk_indices, parent_inds], axis=0)
 
             un, idx = tf.unique(chunk_indices)
+
+            list_of_inds = []
+
+            for i in range(tf.shape(un)[0]):
+                list_of_inds.append(un[i].numpy())
+
             df = pd.read_parquet(self.filebase + ".parquet", columns=tf.strings.as_string(un).numpy())
             # Read only the selected indices into memory,
             # this read is made to be as large as possible, consisting of several batches, but (perhaps not the entire dataset)
 
-            df_numpy = pd.DataFrame.to_numpy(df)[0:self.n_markers, list(idx)]
+            df_numpy = tf.convert_to_tensor(pd.DataFrame.to_numpy(df), tf.float32)
+
+            df_numpy = df_numpy[0:self.n_markers, :]
+
+            df_numpy = tf.gather(df_numpy, idx, axis = 1)
+
             # Set nan values to 9. For e.g. the MAGIC wheat dataset, that has missing values corresponding represented by NaN
-            df_numpy[np.where(np.isnan(df_numpy))] = 9
+            nan_inds = tf.where(tf.math.is_nan(df_numpy))
+            df_numpy = tf.tensor_scatter_nd_update(df_numpy, nan_inds,tf.ones(tf.shape(nan_inds)[0]) * 9. )
+
             # If on the last batch, don't add any recombined samples
             if not chunks_read == (num_chunks - 1):
 
                 original_samples = df_numpy[:, 0:int(batches_per_chunk * self.batch_size)]
-                parent_samples = df_numpy[:, int(batches_per_chunk * self.batch_size):]
+                if self.recombination:
+                    parent_samples = df_numpy[:, int(batches_per_chunk * self.batch_size):]
 
             else:
 
@@ -1276,11 +1307,10 @@ class alt_data_generator(data_generator_ae):
                         num_samples_last_chunk = self.n_valid_samples % chunk_size
 
                 original_samples = df_numpy[:, 0:int(num_samples_last_chunk)]
-
-                parent_samples = df_numpy[:, int(num_samples_last_chunk):]
+                if self.recombination:
+                    parent_samples = df_numpy[:, int(num_samples_last_chunk):]
 
             # Here, batches per chunk will be the same for all chunks, except for the last, which will most likely be a bit smaller
-
 
             batches_read = 0
 
@@ -1293,23 +1323,20 @@ class alt_data_generator(data_generator_ae):
 
                 if self.recombination and training:
 
-                    # num_parent_samples_per_batch = recombined_samples_per_batch*2**self.generations
                     num_parent_samples_per_batch = self.n_parent_samples()
 
                     parent_genotypes = parent_samples[:,
                                        batches_read * num_parent_samples_per_batch: batches_read * num_parent_samples_per_batch + num_parent_samples_per_batch]
                     p_inds = parent_inds[
                              batches_read * num_parent_samples_per_batch: batches_read * num_parent_samples_per_batch + num_parent_samples_per_batch]
-                    genotypes_train = np.append(genotypes_train, parent_genotypes, axis=1)
-                    inds = np.append(inds, p_inds)
+                    genotypes_train = tf.concat([genotypes_train, parent_genotypes], axis=1)
+                    inds = tf.concat([inds, p_inds], axis= 0)
 
-                    if (genotypes_train.shape[1] == (self.batch_size + num_parent_samples_per_batch)):
+                    if genotypes_train.shape[1] == (self.batch_size + num_parent_samples_per_batch):
                         args = [False, training]
-                        # args = tf.tile(tf.reshape(tf.convert_to_tensor([False, training]), [1,2]),[self.recombined_batch_size,1])
                         yield genotypes_train, self.ind_pop_list_train_orig[inds, :], args
                     else:
                         args = [True, training]
-                        # args = tf.tile(tf.reshape(tf.convert_to_tensor([True, training]), [1,2]),[self.recombined_batch_size,1])
                         yield genotypes_train, self.ind_pop_list_train_orig[inds, :], args
 
                 else:
@@ -1319,11 +1346,9 @@ class alt_data_generator(data_generator_ae):
 
                     if genotypes_train.shape[1] == self.batch_size:
                         args = [False, training]
-                        # args = tf.tile(tf.reshape(tf.convert_to_tensor([False, training]), [1,2]),[self.recombined_batch_size,1])
                         yield genotypes_train, self.ind_pop_list_train_orig[inds, :], args
                     else:
                         args = [True, training]
-                        # args = tf.tile(tf.reshape(tf.convert_to_tensor([True, training]), [1,2]),[self.recombined_batch_size,1])
                         yield genotypes_train, self.ind_pop_list_train_orig[inds, :], args
 
                 batches_read += 1
@@ -1353,8 +1378,6 @@ class alt_data_generator(data_generator_ae):
             This version is used to give samples to tfrecord. Draw no parent samples.
         """
 
-        # TODO: There seems to be an issue where (in the very rare case) that when n_valid_batches % batch_size = 0, it sends a last batch with 0 samples, which is not good. Fix this sometime, meanwhile, just choose another set of parameters.
-
         if training:
             training = True
             n_samples = self.n_train_samples
@@ -1362,7 +1385,7 @@ class alt_data_generator(data_generator_ae):
             if shuffle:
                 indices = tf.random.shuffle(self.sample_idx_train)
             else:
-                indices = self.sample_idx_train[np.arange(0, n_samples)]
+                indices = self.sample_idx_train[tf.range( n_samples)]
 
         elif not training:
             training = False
@@ -1370,32 +1393,38 @@ class alt_data_generator(data_generator_ae):
             if shuffle:
                 indices = tf.random.shuffle(self.sample_idx_valid)
             else:
-                indices = self.sample_idx_valid[np.arange(0, n_samples)]
+                indices = self.sample_idx_valid[tf.range( n_samples)]
 
 
         batch_size = self.batch_size//n_workers
 
         chunk_size = pref_chunk_size // batch_size * batch_size  # Make the preferred chunk size an integer multiple of the batch size
-        num_chunks = np.ceil(n_samples / chunk_size)
+        num_chunks = tf.math.ceil(n_samples / chunk_size)
         chunks_read = 0
         indices = tf.cast(indices, tf.int32)
         while chunks_read < num_chunks:
 
             chunk_indices = indices[chunk_size * chunks_read: chunk_size * (chunks_read + 1)]
-            batches_per_chunk = np.ceil(len(chunk_indices) / batch_size)
+            batches_per_chunk = tf.math.ceil(len(chunk_indices) / batch_size)
             un, idx = tf.unique(chunk_indices)
             df = pd.read_parquet(self.filebase + ".parquet", columns=tf.strings.as_string(un).numpy())
             # Read only the selected indices into memory,
             # this read is made to be as large as possible, consisting of several batches, but (perhaps not the entire dataset)
 
-            df_numpy = pd.DataFrame.to_numpy(df)[0:self.n_markers, list(idx)]
+            df_numpy = tf.convert_to_tensor(pd.DataFrame.to_numpy(df), tf.float32)
+
+            df_numpy = df_numpy[0:self.n_markers, :]
+
+            df_numpy = tf.gather(df_numpy, idx, axis = 1)
+
             # Set nan values to 9. For e.g. the MAGIC wheat dataset, that has missing values corresponding represented by NaN
-            df_numpy[np.where(np.isnan(df_numpy))] = 9
+            nan_inds = tf.where(tf.math.is_nan(df_numpy))
+            df_numpy = tf.tensor_scatter_nd_update(df_numpy, nan_inds,tf.ones(tf.shape(nan_inds)[0]) * 9. )
+
             # If on the last batch, don't add any recombined samples
             if not chunks_read == (num_chunks - 1):
 
                 original_samples = df_numpy[:, 0:int(batches_per_chunk * batch_size)]
-                parent_samples = df_numpy[:, int(batches_per_chunk * batch_size):]
 
             else:
 
@@ -1424,7 +1453,7 @@ class alt_data_generator(data_generator_ae):
 
                 # If the shape does not match the usual batch size, i.e., we are on the last batch, also yield the keyword "last_batch" as a True bool. Need to explicitly give this since
                 # Tensorflow does not know the actual batch size at run time, and I need to create the mask not having access to .shape commands at run time.
-                # NOTE: IT CAN BE THE LAST BATCH AND STILL MATCH THE BATCH SIZE.   
+                # NOTE: IT CAN BE THE LAST BATCH AND STILL MATCH THE BATCH SIZE.
 
                 if genotypes_train.shape[1] == batch_size :
                     if batches_read == batches_per_chunk-1 and chunks_read ==num_chunks-1:
@@ -1440,6 +1469,7 @@ class alt_data_generator(data_generator_ae):
 
                 batches_read += 1
             chunks_read += 1
+
 
     def recombination_mapping(self, x, inds, args):
         """
@@ -1467,7 +1497,7 @@ class alt_data_generator(data_generator_ae):
         genotypes_orig = genotypes_train[:, 0:num_samples + n_recombined_samples_per_generation * (
                 self.generations - self.generations_left)]
         genotypes_parents = genotypes_train[:, num_samples + n_recombined_samples_per_generation * (
-                self.generations - self.generations_left):]  # num_samples + recombined_samples_per_batch]
+                self.generations - self.generations_left):]
         offspring_tensor = self.create_offspring_unlooped(genotypes_parents)
 
         # Append the new samples to the training set.
@@ -1475,13 +1505,10 @@ class alt_data_generator(data_generator_ae):
 
         # Append the appropriate fam-entries.
         if self.generations_left == 1:
-            num_recombined_sample_prev_generation = self.n_recombined_samples_per_generation * (self.generations - self.generations_left)
             num_recombined_sample_this_generation = self.n_recombined_samples_last_generation
         else:
-            num_recombined_sample_prev_generation = self.n_recombined_samples_per_generation * (self.generations - self.generations_left)
             num_recombined_sample_this_generation = self.n_recombined_samples_per_generation
 
-        original_sample_pops = inds[0:self.batch_size + num_recombined_sample_prev_generation, :]
         original_sample_pops = inds[0:num_samples + n_recombined_samples_per_generation * (
                 self.generations - self.generations_left), :]
 
@@ -1494,8 +1521,7 @@ class alt_data_generator(data_generator_ae):
 
         recombined_poplist = tf.concat([original_sample_pops, new_fam], axis = 0)
 
-        # tf.print("recomb_pop shape: ", tf.shape(recombined_poplist))
-        # tf.print(recombined_poplist)
+
         self.generations_left = self.generations_left - 1
         return genotypes_train, recombined_poplist[:tf.shape(genotypes_train)[1], :], [tf.cast(last_batch, tf.bool),training]
 
@@ -1522,27 +1548,19 @@ class alt_data_generator(data_generator_ae):
 
         self.n_parent_samples()
         genotypes_train = x
-        # last_batch = args[0]  # This is false for all batches except the last. It is needed to control the sample size
-        # training = args[1]  # This is true if the dataset is generated for training (not validation)
-        # tf.print(inds)
+
         ind_pop_list = tf.convert_to_tensor(get_ind_pop_list(self.filebase)[self.sample_idx_train, 0])
-        # tf.print(get_ind_pop_list(self.filebase)[:,0])
         num_samples = tf.cast(tf.math.ceil(tf.cast(tf.shape(x)[0], tf.float32) * self.recombination_rate), tf.int32)
 
         do_funky_choice = False
         # Here, funky choice means that we choose parents based on latent-space-coordinate-closeness
         if do_funky_choice:
-            # tf.print(tf.shape(tf.where(inds[:,0,tf.newaxis] == ind_pop_list)[:,1,tf.newaxis]))
-            # tf.print(tf.where(inds[:,0,tf.newaxis] == ind_pop_list)[:,1,tf.newaxis])
 
             # Extract the current samples from the saved projected coordinates
 
             samples_to_consider = tf.gather_nd(tf.squeeze(self.encoded_things), tf.where(inds[:, 0, tf.newaxis] == ind_pop_list)[:, 1, tf.newaxis])
             # samples_to_consider = self.encoded_things[tf.where(inds[:,0,tf.newaxis] == ind_pop_list)[:,1],:]
 
-            # tf.print(samples_to_consider)#tf.print(tf.where(inds[:,=]))
-            n_samples = self.total_batch_size - self.batch_size
-            # indices = tf.random.shuffle(tf.range(self.batch_size))[:n_samples]
             x_coords = samples_to_consider[:, 0, tf.newaxis]
             y_coords = samples_to_consider[:, 1, tf.newaxis]
 
@@ -1560,16 +1578,12 @@ class alt_data_generator(data_generator_ae):
                 # First iteration will have 0 probabilities. This is bad, will always choose the last elements. Set
                 # the probabilities to be equal for this case.
                 probabilities = tf.ones_like(probabilities)
-            # tf.print(tf.reduce_max(probabilities))
 
             # probabilities = probabilities[:tf.cast(self.batch_size * self.recombination_rate,tf.int32) ]
 
             parent_inds = tf.random.categorical(tf.math.log(probabilities), 1)
-            # tf.print(tf.shape(indices))
-            # tf.print("dret", parent_inds)
+
             chosen_parents = tf.squeeze(tf.gather(genotypes_train, parent_inds))
-            # tf.print(tf.shape(chosen_parents))
-            # tf.print("dret",chosen_parents)
 
             genotypes_parents = tf.concat([genotypes_train[:, :self.n_markers], chosen_parents[:, :self.n_markers]], axis = 0)
 
@@ -1578,25 +1592,15 @@ class alt_data_generator(data_generator_ae):
 
             genotypes_parents = tf.gather(genotypes_train, indices, axis=0)
 
-        # tf.print(num_samples)
-        # tf.print(tf.shape(genotypes_parents))
-
         offspring_tensor = tf.transpose(self.create_offspring_unlooped(tf.transpose(genotypes_parents)))
-
-        # Append the new samples to the training set.
-        # genotypes_train = tf.concat([genotypes_orig, offspring_tensor], axis=1)
 
         # Append the appropriate fam-entries.
         if self.generations_left == 1:
-            num_recombined_sample_prev_generation = self.n_recombined_samples_per_generation * (
-                    self.generations - self.generations_left)
+
             num_recombined_sample_this_generation = self.n_recombined_samples_last_generation
         else:
-            num_recombined_sample_prev_generation = self.n_recombined_samples_per_generation * (
-                    self.generations - self.generations_left)
             num_recombined_sample_this_generation = self.n_recombined_samples_per_generation
 
-        # artificial_superpop = tf.convert_to_tensor(["zArtificial"])
         artificial_superpop = tf.reshape(tf.convert_to_tensor(["zArtificial"] * num_recombined_sample_this_generation),
                                         [num_recombined_sample_this_generation, 1])
 
@@ -1677,16 +1681,15 @@ class alt_data_generator(data_generator_ae):
             exit()
 
         extra_prob = 1
-        self.recomb_prob = 1 / 2 * (1 - np.exp(-4 * (cm_dist[1:] - cm_dist[:-1]))) * extra_prob
+        self.recomb_prob = 1 / 2 * (1 - tf.math.exp(-4 * (cm_dist[1:] - cm_dist[:-1]))) * extra_prob
 
-        tf.print(tf.reduce_max(self.recomb_prob))
 
     def create_offspring(self, parent_array):
 
         recomb_prob = self.recomb_prob
 
         u = tf.random.uniform(shape=recomb_prob.shape, minval=0, maxval=1)
-        cut_idx = (tf.where(u < recomb_prob))
+        cut_idx = tf.where(u < recomb_prob)
         b = tf.range(self.n_markers, dtype=tf.int64)
         a = tf.reduce_sum(tf.cast(b[:] < cut_idx, tf.int32), axis=0) % 2
 
@@ -1719,7 +1722,7 @@ class alt_data_generator(data_generator_ae):
         # assuming the missing values are 9
         missing_indices = tf.where(tf.transpose(x) == 9)
 
-        if last_batch == False:
+        if last_batch is False:
             if training:
                 num_samples = self.total_batch_size
             else:
@@ -1782,47 +1785,46 @@ class alt_data_generator(data_generator_ae):
             and if it is the training set or validation set.
         """
         last_batch = args[0]  # [0,:]
-        training = args[1]  # [1,:]
         # assuming the missing values are 9
         missing_indices = tf.where(tf.transpose(x) == 9)
 
-
         num_samples = tf.shape(x)[1]
 
-        # a is a sparse tensor containing ones in the missing values indices.
-        a = tf.sparse.SparseTensor(indices=missing_indices,
+        missing_tensor = tf.sparse.SparseTensor(indices=missing_indices,
                                    values=tf.ones(shape=tf.shape(missing_indices)[0], dtype=tf.float32),
                                    dense_shape=(num_samples, self.n_markers))
 
         indices = missing_indices[:, 1]
         x = tf.transpose(x)
-
-        if self.impute_missing:
-            b = tf.sparse.SparseTensor(indices=missing_indices,
+        if self.impute_missing and False:
+            fix_missing = tf.sparse.SparseTensor(indices=missing_indices,
                                        values=(tf.gather(self.most_common_genos, indices=indices) - 9),
                                        dense_shape=(num_samples, self.n_markers))
 
-            x = tf.sparse.add(x, b)
+            x = tf.sparse.add(x, fix_missing)
+
+            # This is more optimal, most likely. At least more succinct.
+            #tf.tensor_scatter_nd_add(tensor, indices, updates)
+
 
         if self.normalization_mode == "genotypewise01":
             if self.normalization_options["flip"]:
                 # This operation results in the missing values having a value of -7/2, wrong! Amend this by adding 3.5-missing_val
                 x = -(x - 2) / 2
                 if not self.impute_missing:
-                    x = tf.sparse.add(x, a * (3.5 + self.missing_val))
+                    x = tf.sparse.add(x, missing_tensor * (3.5 + self.missing_val))
             else:
                 # This operation results in the missing values having a value of 4.5, wrong! Amend this by subtracting 4.5-missing_val
                 x = x / 2
                 if not self.impute_missing:
-                    x = tf.sparse.add(x, a * (self.missing_val - 4.5))
+                    x = tf.sparse.add(x, missing_tensor * (self.missing_val - 4.5))
 
         elif self.normalization_mode == "standard" or self.normalization_mode == "smartPCAstyle":
             if self.normalization_options["flip"]:
                 x = -(x - 2)
-            #x2 = (x - self.scaler.mean_) / tf.math.sqrt(self.scaler.var_)
             x2 = (x - tf.cast(self.scaler.mean_,tf.float32)) / tf.cast(tf.math.sqrt(self.scaler.var_),tf.float32)
             if not self.impute_missing:
-                x = tf.sparse.add(x2, a.__mul__(self.missing_val - x2))
+                x = tf.sparse.add(x2, missing_tensor.__mul__(self.missing_val - x2))
 
         return x, inds, last_batch
 
@@ -1857,40 +1859,41 @@ class alt_data_generator(data_generator_ae):
                     self.n_train_samples_last_batch + self.recombination * (self.total_batch_size - self.batch_size),
                     self.n_markers), fill_value=1.0,
                     dtype=tf.float32)
-                b = tf.random.uniform(shape=(
+
+                probability = tf.random.uniform(shape=(
                     self.n_train_samples_last_batch + self.recombination * (self.total_batch_size - self.batch_size),
                     self.n_markers), minval=0, maxval=1)
 
-                indices = tf.where(b < sparsify_fraction)
+                indices = tf.where(probability < sparsify_fraction)
 
-                b = tf.sparse.SparseTensor(indices=indices,
+                missing_tensor = tf.sparse.SparseTensor(indices=indices,
                                            values=(tf.repeat(-1.0, tf.shape(indices)[0])),
                                            dense_shape=(self.n_train_samples_last_batch + self.recombination * (
                                                    self.total_batch_size - self.batch_size), self.n_markers))
-                mask = tf.sparse.add(mask, b)
+                mask = tf.sparse.add(mask, missing_tensor)
             else:
                 mask = tf.experimental.numpy.full(shape=(self.n_valid_samples_last_batch, self.n_markers),
                                                   fill_value=1.0,
                                                   dtype=tf.float32)
-                b = tf.random.uniform(shape=(self.n_valid_samples_last_batch, self.n_markers), minval=0, maxval=1)
+                probability = tf.random.uniform(shape=(self.n_valid_samples_last_batch, self.n_markers), minval=0, maxval=1)
 
-                indices = tf.where(b < sparsify_fraction)
+                indices = tf.where(probability < sparsify_fraction)
 
-                b = tf.sparse.SparseTensor(indices=indices,
+                missing_tensor = tf.sparse.SparseTensor(indices=indices,
                                            values=(tf.repeat(-1.0, tf.shape(indices)[0])),
                                            dense_shape=(self.n_valid_samples_last_batch, self.n_markers))
-                mask = tf.sparse.add(mask, b)
+                mask = tf.sparse.add(mask, missing_tensor)
 
         else:
 
             mask = tf.experimental.numpy.full(shape=(num_samples, self.n_markers), fill_value=1.0,
                                               dtype=tf.float32)
-            b = tf.random.uniform(shape=(num_samples, self.n_markers), minval=0, maxval=1)
-            indices = tf.where(b < sparsify_fraction)
-            b = tf.sparse.SparseTensor(indices=indices,
+            probability = tf.random.uniform(shape=(num_samples, self.n_markers), minval=0, maxval=1)
+            indices = tf.where(probability < sparsify_fraction)
+            missing_tensor = tf.sparse.SparseTensor(indices=indices,
                                        values=(tf.repeat(-1.0, tf.shape(indices)[0])),
                                        dense_shape=(num_samples, self.n_markers))
-            mask = tf.sparse.add(mask, b)
+            mask = tf.sparse.add(mask,missing_tensor)
 
         sparsified_data = tf.math.add(tf.math.multiply(x, mask), -1 * missing_value * (mask - 1))
         input_data_train = tf.stack([sparsified_data, mask], axis=-1)
@@ -1910,16 +1913,14 @@ class alt_data_generator(data_generator_ae):
 
     def sparse_mapping_for_tf_record(self, x, inds, original_genotypes, original_inds):
         """
-        I am having a hard time getting the shapes correct for the case with no sparsification.
-        It says that it expects [batch_size, n_markers, 1], but receives [batch_size, n_markers]. I have not yet come up with a solution for this.
-        In the meantime, if we want to run with no sparsification, just set sparsifies = [0] in the data_opts files.
+
+        Sets a fraction of the data to be missing. An augmentation in order to reduce overfitting.
+
 
         """
 
         if self.sparsify_input and self.training:
-            # Not 100% straight forward how to get the same 'rolling sparsification' that the sparsify fraction uses the next value for the next batch.
-            # Here I am just choosing one of the fractions at random. Should have essentially the same effect if I am not missing anything.
-            # Makes it hard to compare the runs for the original code vs my alteration.
+
             sparsify_fraction = tf.random.shuffle(self.sparsifies)[0]
         else:
             sparsify_fraction = 0.0
@@ -1951,23 +1952,17 @@ class alt_data_generator(data_generator_ae):
 
         if self.missing_mask_input:
             return input_data_train, x, inds, original_genotypes, original_inds
-
         else:
-            # Just extract everything but the last dimension, which contains the mask.
-            #return input_data_train[:, :, 0], x, inds, original_genotypes[:, :, 0], original_inds
-            # TEST123
             return input_data_train[:, :, 0], x, inds, original_genotypes[:, :, 0], original_inds
 
     def sparse_mapping_for_tf_record_contrastive(self, x, inds, original_genotypes, original_inds):
         """
-        I am having a hard time getting the shapes correct for the case with no sparsification.
-        It says that it expects [batch_size, n_markers, 1], but receives [batch_size, n_markers]. I have not yet come up with a solution for this.
-        In the meantime, if we want to run with no sparsification, just set sparsifies = [0] in the data_opts files.
+        Sets a fraction of the data to be missing. An augmentation in order to reduce overfitting.
 
-        For contrastive learning, we want to have two sparsified samples for each sample. Just stack the samples on top once.
+        For contrastive learning, we want to have two sparsified samples for each sample. Just stack the samples on top once, then sparsify.
+        This generates samples as [anchors, positives], that can be extracted as such, and fed to the model, and subsequently the contrastive losses.
 
         """
-        # tf.print(self.contrastive, self.training)
         if self.sparsify_input and self.training or self.contrastive:
             sparsify_fraction = tf.random.shuffle(self.sparsifies)[0]
         else:
@@ -1978,6 +1973,8 @@ class alt_data_generator(data_generator_ae):
         except:
             pass
 
+        if not self.training:
+            pass
         x = tf.concat([x, x], axis=0)
 
         num_samples = tf.shape(x)[0]
@@ -2005,9 +2002,7 @@ class alt_data_generator(data_generator_ae):
             return input_data_train, x, inds, original_genotypes, original_inds
 
         else:
-            # Just extract everything but the last dimension, which contains the mask.
-            #return input_data_train[:, :, 0], x, inds, original_genotypes[:, :, 0], original_inds
-            #TEST123
+
             return input_data_train[:, :, 0], x, inds, original_genotypes[:, :, 0], original_inds
 
     def create_temp_fam_and_superpop(self, data_prefix, superpopulations_file, n_train_batches):
@@ -2043,7 +2038,7 @@ class alt_data_generator(data_generator_ae):
         artificial_subpop = np.array([["Artificial_1x"]])
 
         for i in range(self.generations - 1):
-            artificial_subpop = np.append(artificial_subpop, np.array(["Artificial_{}x".format(i + 2)]))
+            artificial_subpop = np.append(artificial_subpop, np.array([f"Artificial_{i + 2}x"]))
 
         artificial_subpop = artificial_subpop.reshape(self.generations, 1)
         addition_of_recombined = np.append(artificial_subpop, artificial_superpop, axis=1)
@@ -2066,100 +2061,87 @@ class alt_data_generator(data_generator_ae):
 
     def prep_normalizer(self, ds):
         # TODO- Fix so that the normalizer is calibrated with more samples than it is trained with (in each batch). In this case, if very few samples are used, there may be some issues if all have missing data at the same marker position
-        temp = np.zeros((self.n_markers, 3))
-        # temp = tf.zeros([self.n_markers,3])
+
+        genotype_counts = tf.zeros([self.n_markers, 3], dtype = tf.float32)
+
+        compute_class_conc = False
 
 
+        if compute_class_conc: # Note, right now hardcoded to word for HumanOrigins dataset.
+            pass
+        #superpops = tf.convert_to_tensor(pd.read_csv("example_tiny/HO_superpopulations", header=None).to_numpy())
+        superpops = tf.convert_to_tensor(pd.read_csv("Data/dog/dog_superpopulations", header=None, encoding= "utf-8").to_numpy(), dtype = tf.string)
 
-        a = pd.read_csv(self.filebase + ".fam", header=None)
-        if a.shape[1] == 1:
-            a = pd.read_csv(self.filebase + ".fam", header=None, delimiter = " ")
+        temp_superpop = tf.zeros((tf.shape(tf.unique(superpops[:, 1])[0])[0], self.n_markers, 3))
+        temp_pop = tf.zeros((tf.shape(tf.unique(superpops[:, 0])[0])[0], self.n_markers, 3), dtype = tf.int32)
 
-        b = a.to_numpy()
-        c = [b[i][0].split() for i in range(len(b))]
-        fam = tf.convert_to_tensor(np.array(c))
+        superpop_counts = tf.zeros((tf.shape((tf.unique(superpops[:, 1])[0]))[0], 1))
 
-
-        compute_class_conc = False 
-        if compute_class_conc:
-
-            superpops = tf.convert_to_tensor(pd.read_csv("example_tiny/HO_superpopulations", header=None).to_numpy())
-
-            print(len(tf.unique(superpops[:, 1])[0]))
-            temp_superpop = np.zeros((len(tf.unique(superpops[:, 1])[0]), self.n_markers, 3))
-            temp_pop = np.zeros((len(tf.unique(superpops[:, 0])[0]), self.n_markers, 3))
-
-            superpop_counts = np.zeros((len(tf.unique(superpops[:, 1])[0]), 1))
-
-            pop_counts = np.zeros((len(tf.unique(superpops[:, 0])[0]), 1))
-
+        pop_counts = tf.zeros((tf.shape(tf.unique(superpops[:, 0])[0])[0], 1))
 
 
         print("Calibrating data scaler for normalization, remember to fix this. In prep_normalizer. Note in the function def.")
-        if True or self.normalization_mode == "standard" or self.normalization_mode == "smartPCAstyle" or self.impute_missing == True:
-            self.scaler = StandardScaler()
+        if True or self.normalization_mode == "standard" or self.normalization_mode == "smartPCAstyle" or self.impute_missing is True:
 
-            for i, j, args in ds:
-                last_batch = args[0]
-                # Extract correct batch size, don't want to use recombined samples.
-                # There are batch_size number of samples in each batch, expcept the last one! This may create some issues when recombining
-                # Update: This happens before recombination, at least in the tf-record version.
-                num_samples = self.n_train_samples_last_batch * tf.cast(last_batch, tf.int32) + self.batch_size * (
-                        1 - tf.cast(last_batch, tf.int32))
-
-                i = i[:self.n_markers, :num_samples]
+            for batch_data, batch_label, _ in ds:
 
 
-                I = tf.convert_to_tensor(i)
+                #last_batch = args[0]
+                # THIS LINE THREW A MULTITUDE OF ERRORS, SWITCHING BETWEEN DIFFERENT LINES AND MESSAGES. WHY?
+
+                #batch_data = batch_data[:self.n_markers, :]
+
+
+                I = tf.convert_to_tensor(batch_data)
                 a = tf.sparse.SparseTensor(
                     indices=tf.cast(tf.where(I == 9), tf.int64),
                     values=(tf.repeat(np.nan, tf.shape(tf.where(I == 9))[0])),
-                    dense_shape=tf.cast(tf.shape(tf.convert_to_tensor(i)), tf.int64)
+                    dense_shape=tf.cast(tf.shape(tf.convert_to_tensor(batch_data)), tf.int64)
                 )
                 # The addition of a and i will set the missing data to nan's instead of 9's, since they will otherwise
                 # mess up the fitting of the scaler.
 
                 if self.normalization_options["flip"]:
-                    i = -(i - 2)  # This sends 1 to 1, 0 to 2, and 2 to 0
-                self.scaler.partial_fit(tf.transpose(tf.sparse.add(a, i)))
-                
-                for k in range(3):
-                    temp[:, k] += tf.reduce_sum(tf.cast(i == k, tf.int32), axis=1)
+                    batch_data = -(batch_data - 2)  # This sends 1 to 1, 0 to 2, and 2 to 0
 
+                self.scaler.partial_fit(tf.transpose(tf.sparse.add(a, batch_data)))
+                for k in range(3):
+                    inds = tf.concat([tf.range(self.n_markers)[:,tf.newaxis], tf.ones([self.n_markers,1], tf.int32)*k ], axis = 1)
+                    genotype_counts = tf.tensor_scatter_nd_update(genotype_counts, inds,genotype_counts[:,k] + tf.reduce_sum(tf.cast(batch_data == k, tf.float32), axis=1) )
 
                 if compute_class_conc:
-                    pop_inds = tf.where(j[:, 1, tf.newaxis] == superpops[:, 0])[:, 1]
+                    pop_inds = tf.where(batch_label[:, 1, tf.newaxis] == superpops[:, 0])[:, 1]
                     for count in pop_inds:
-                        pop_counts[count, 0] += 1
+                        pop_counts = tf.tensor_scatter_nd_update(pop_counts, [[count,0]], [pop_counts[count,0]+1])
 
-
-                    for sample in tf.range(tf.shape(i)[1]):
+                    #for sample in range(num_samples):
+                    for sample in tf.range(tf.shape(batch_data)[1]):
                         for k in range(3):
-                            temp_pop[pop_inds[sample], :, k] += tf.transpose(tf.cast(i[:, sample] == k, tf.int32))
+                            #temp_pop[pop_inds[sample], :, k] += tf.transpose(tf.cast(batch_data[:, sample] == k, tf.int32))
 
-            # test1 = tf.reduce_mean(tf.reduce_max(temp_pop, axis=2), 1)
-            if compute_class_conc:
-                for ind in range(len(temp_pop)):
-                    # superpop = superpops[ind,1]
+                            #tf.print(f"{tf.concat([tf.ones([tf.shape(temp_pop)[0],1], tf.int32)*tf.cast(pop_inds[sample],tf.int32),tf.range(tf.shape(temp_pop)[0])[:,tf.newaxis], tf.ones([tf.shape(temp_pop)[0],1], tf.int32)*k ], axis = 1)} lol ")
+                            inds = tf.concat([tf.ones([tf.shape(temp_pop)[1],1], tf.int32)*tf.cast(pop_inds[sample],tf.int32), tf.range(tf.shape(temp_pop)[1])[:,tf.newaxis], tf.ones([tf.shape(temp_pop)[1],1], tf.int32)*k ], axis = 1)
+                            temp_pop = tf.tensor_scatter_nd_update(temp_pop,inds,  temp_pop[pop_inds[sample], :, k] + tf.transpose(tf.cast(batch_data[:, sample] == k, tf.int32)))
+
+            if compute_class_conc and False:
+                for ind, _ in tf.shape(temp_pop)[0]: # 1 enumerate(temp_pop):
                     superpop = tf.unique(superpops[:, 1])[1][ind]
-                    temp_superpop[superpop] += temp_pop[ind]
-                    superpop_counts[superpop] += pop_counts[ind]
+                    #temp_superpop[superpop] += temp_pop[ind]
+                    temp_superpop = tf.tensor_scatter_nd_update(temp_superpop, [superpop],temp_superpop[superpop]+ temp_pop[ind])
+                    #superpop_counts[superpop] += pop_counts[ind]
+                    superpop_counts = tf.tensor_scatter_nd_update(superpop_counts, [superpop],superpop_counts[superpop]+ tf.cast(pop_counts[ind], tf.float32))
 
-                # print(temp_superpop)
-                # print(superpop_counts)
-                # print(sum(superpop_counts))
-                # print(tf.reduce_sum(tf.reduce_mean(tf.reduce_max(temp_superpop, axis=2),1) / tf.reduce_sum(superpop_counts[:,0])))
-                # exit()
+
                 self.baseline_concordance_superpop_informed = tf.reduce_sum(tf.reduce_mean(tf.reduce_max(temp_superpop, axis=2), 1) / tf.reduce_sum(superpop_counts[:, 0]))
 
                 self.baseline_concordance_pop_informed = tf.reduce_sum(tf.reduce_mean(tf.reduce_max(temp_pop, axis=2), 1) / tf.reduce_sum(pop_counts[:, 0]))
-                
-            self.most_common_genos = tf.cast(tf.transpose(tf.math.argmax(temp, axis=1)), tf.float32)
 
-            self.baseline_concordance = tf.reduce_mean(tf.reduce_max(temp, axis=1) / self.n_train_samples)
+            self.most_common_genos = tf.cast(tf.transpose(tf.math.argmax(genotype_counts, axis=1)), tf.float32)
+
+            self.baseline_concordance = tf.reduce_mean(tf.reduce_max(genotype_counts, axis=1) / self.n_train_samples)
 
             # Compute baseline concordances for k-mers
-            p_cor = tf.reduce_max(temp, axis=1) / self.n_train_samples
+            p_cor = tf.reduce_max(genotype_counts, axis=1) / self.n_train_samples
             k_vec = [1, 2, 3, 4, 5]
             for k in k_vec:
                 p_cor2 = tf.concat([tf.reshape(p_cor, [self.n_markers, 1]), [[-1]]], axis=0)
@@ -2172,27 +2154,25 @@ class alt_data_generator(data_generator_ae):
                                                             axis=0)
 
             self.baseline_concordances_k_mer = baseline_concordances_k_mer
-            """
 
-            This below is the how often we are correct if we choose most common variant, for all snp values
-            tf.reduce_max(temp, axis=1) / self.n_train_samples
+            #This below is the how often we are correct if we choose most common variant, for all snp values
+            #tf.reduce_max(temp, axis=1) / self.n_train_samples
 
-            """
 
             if "SLURM_NTASKS_PER_NODE" in os.environ:
                 if int(os.environ["SLURM_PROCID"]) == 0:
-                    tf.print("Baseline concordance:", self.baseline_concordance)
-                    for i in range(5):
-                        tf.print("Baseline concordance {}-mer:".format(k_vec[i]), self.baseline_concordances_k_mer[i])
+                    #tf.print("Baseline concordance:", self.baseline_concordance)
+                    #for i in range(5):
+                    #    tf.print("Baseline concordance {}-mer:".format(k_vec[i]), self.baseline_concordances_k_mer[i])
 
                     if self.normalization_mode == "smartPCAstyle":
                         p = (1 + self.scaler.mean_ * self.scaler.n_samples_seen_) / (2 + 2 * self.scaler.n_samples_seen_)
 
                         self.scaler.var_ = p * (1 - p)
             else:
-                tf.print("Baseline concordance:", self.baseline_concordance)
-                for i in range(5):
-                    tf.print("Baseline concordance {}-mer:".format(k_vec[i]), self.baseline_concordances_k_mer[i])
+                #tf.print("Baseline concordance:", self.baseline_concordance)
+                #for i in range(5):
+                #    tf.print("Baseline concordance {}-mer:".format(k_vec[i]), self.baseline_concordances_k_mer[i])
 
                 if self.normalization_mode == "smartPCAstyle":
                     p = (1 + self.scaler.mean_ * self.scaler.n_samples_seen_) / (2 + 2 * self.scaler.n_samples_seen_)
@@ -2200,11 +2180,57 @@ class alt_data_generator(data_generator_ae):
                     self.scaler.var_ = p * (1 - p)
             if compute_class_conc:
                 if "SLURM_NTASKS_PER_NODE" in os.environ:
-                    if int(os.environ["SLURM_PROCID"]) == 0:    
+                    if int(os.environ["SLURM_PROCID"]) == 0:
                         tf.print("Superpop Informed Baseline concordance: ", self.baseline_concordance_superpop_informed)
                         tf.print("Pop Informed Baseline concordance: ", self.baseline_concordance_pop_informed)
 
-            # self.baselines = [self.baseline_concordances_k_mer, self.baseline_concordance_superpop_informed,self.baseline_concordance_pop_informed)]
+    def prep_normalizer_test(self, ds):
+
+        genotype_counts = tf.zeros([self.n_markers, 3], dtype = tf.float32)
+
+        print("Calibrating data scaler for normalization, remember to fix this. In prep_normalizer. Note in the function def.")
+        if True or self.normalization_mode == "standard" or self.normalization_mode == "smartPCAstyle" or self.impute_missing == True:
+
+            for batch_data, _, _ in ds:
+
+                I = tf.convert_to_tensor(batch_data)
+                a = tf.sparse.SparseTensor(
+                    indices=tf.cast(tf.where(I == 9), tf.int64),
+                    values=(tf.repeat(np.nan, tf.shape(tf.where(I == 9))[0])),
+                    dense_shape=tf.cast(tf.shape(tf.convert_to_tensor(batch_data)), tf.int64)
+                )
+                # The addition of a and i will set the missing data to nan's instead of 9's, since they will otherwise
+                # mess up the fitting of the scaler.
+
+                if self.normalization_options["flip"]:
+                    batch_data = -(batch_data - 2)  # This sends 1 to 1, 0 to 2, and 2 to 0
+
+                self.scaler.partial_fit(tf.transpose(tf.sparse.add(a, batch_data)))
+
+                for k in range(3):
+
+                    inds = tf.concat([tf.range(self.n_markers)[:,tf.newaxis], tf.ones([self.n_markers,1], tf.int32)*k ], axis = 1)
+                    genotype_counts = tf.tensor_scatter_nd_update(genotype_counts, inds,genotype_counts[:,k] + tf.reduce_sum(tf.cast(batch_data == k, tf.float32), axis=1) )
+
+
+
+            self.baseline_concordance = tf.reduce_mean(tf.reduce_max(genotype_counts, axis=1) / self.n_train_samples)
+
+            # Compute baseline concordances for k-mers
+            p_cor = tf.reduce_max(genotype_counts, axis=1) / self.n_train_samples
+            k_vec = [1, 2, 3, 4, 5]
+            for k in k_vec:
+                p_cor2 = tf.concat([tf.reshape(p_cor, [self.n_markers, 1]), [[-1]]], axis=0)
+                if k == k_vec[0]:
+                    baseline_concordances_k_mer = [
+                        tf.reduce_mean(tf.reduce_prod(tf.stack([p_cor2[i:-k + i, 0] for i in range(k)]), axis=0))]
+                else:
+                    baseline_concordances_k_mer = tf.concat([baseline_concordances_k_mer, [
+                        tf.reduce_mean(tf.reduce_prod(tf.stack([p_cor2[i:-k + i, 0] for i in range(k)]), axis=0))]],
+                                                            axis=0)
+
+            self.baseline_concordances_k_mer = baseline_concordances_k_mer
+
 
     def create_dataset(self, pref_chunk_size, mode, shuffle=True):
         if mode == "training" or mode == "project":
@@ -2227,7 +2253,6 @@ class alt_data_generator(data_generator_ae):
             self.scaler.var = 1
             self.prep_normalizer(
                 ds)  # This generates the needed scalers for normalization´using standard and smartPCAstyle
-            self.most_common_genos = tf.ones([self.n_markers, ])
 
         options = tf.data.Options()
         options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
@@ -2236,7 +2261,7 @@ class alt_data_generator(data_generator_ae):
         ds = ds.prefetch(tf.data.AUTOTUNE)
 
         if self.recombination and self.training:
-            for i in range(self.generations):
+            for _ in range(self.generations):
                 ds = ds.map(self.recombination_mapping, num_parallel_calls=tf.data.AUTOTUNE)
 
         ds = ds.map(self.normalize_mapping, num_parallel_calls=tf.data.AUTOTUNE)
@@ -2265,13 +2290,9 @@ class alt_data_generator(data_generator_ae):
         berra_scratch_dir = "/scratch2/temp/"
 
         if "SLURM_JOBID" in os.environ:
-
-            #outdir = "Data/temp/" + os.environ["SLURM_JOBID"] +"/"+mode +"/"
             outdir = berra_scratch_dir + os.environ["SLURM_JOBID"] +"/"+mode +"/"
         else:
             outdir = "Data/temp/" +mode+ "/"
-
-        #tf.print("I just wrote to scratch! :) ")
 
         if not os.path.isdir(outdir ):
 
@@ -2287,40 +2308,30 @@ class alt_data_generator(data_generator_ae):
                 self.scaler = StandardScaler()
                 self.scaler.mean_ = 0
                 self.scaler.var = 1
-                self.prep_normalizer(
-                    ds)  # This generates the needed scalers for normalization´using standard and smartPCAstyle
-                #self.most_common_genos = tf.ones([self.n_markers, ])
-
+                self.prep_normalizer(ds)  # This generates the needed scalers for normalization´using standard and smartPCAstyle
+            print("prep normalizer done")
             ds = ds.map(self.normalize_mapping_for_tf_record, num_parallel_calls=1)  # tf.data.AUTOTUNE)
+            if "SLURM_JOBID" in os.environ:
+                if int(os.environ["SLURM_LOCALID"]) != 0:
+                    time.sleep(10)
+                    print("proc", int(os.environ["SLURM_PROCID"]) , "sleeping for 10 wating for data file creation by chief.")
 
-            if int(os.environ["SLURM_LOCALID"]) != 0:
-                time.sleep(10)
-                print("proc", int(os.environ["SLURM_PROCID"]) , "sleeping for 10 wating for data file creation by chief.")
+                else:
+                    print(" Chief:",  int(os.environ["SLURM_PROCID"]), int(os.environ["SLURM_LOCALID"])    )
+                print("localid: ", int(os.environ["SLURM_LOCALID"]))
+            #write_genotypes_to_tfr_long(self, dataset=ds,out_dir = outdir,filename = self.filebase.split("/")[-1],n_markers = self.n_markers,n_workers = n_workers,mode=mode)
 
-            else:
-                print(" Chief:",  int(os.environ["SLURM_PROCID"]), int(os.environ["SLURM_LOCALID"])    )
-            print("localid: ", int(os.environ["SLURM_LOCALID"]))
-            write_genotypes_to_tfr_long(self, dataset=ds,out_dir = outdir,filename = self.filebase.split("/")[-1],n_markers = self.n_markers,n_workers = n_workers,mode=mode)
-        
+            #write_genotypes_to_tfr_long_one_sample(self, dataset=ds,out_dir = outdir,filename = self.filebase.split("/")[-1], n_workers = n_workers,mode=mode)
+            write_genotypes_to_tfr_long_one_sample_mult_dir(self, dataset=ds,out_dir = outdir,filename = self.filebase.split("/")[-1],n_workers = n_workers,mode=mode)
+
         pattern = "*" + self.filebase.split("/")[-1] + ".tfrecords"
-        #tf.print("pattern", pattern)
 
-        data_isread = False
-
-        #while not data_isread:
-            #try:
-        ds = get_dataset_large(tfr_dir=outdir, pattern=pattern)  # , device_id = device_id)
-            #    data_isread = True
-            #except:
-             #   print("Waiting for chief to write data.  " ) 
-             #   time.sleep(4)  
+        #ds = get_dataset_large(tfr_dir=outdir, pattern=pattern)  # , device_id = device_id)
+        ds = get_dataset_large_mult_dir(tfr_dir=outdir, pattern=pattern)  # , device_id = device_id)
 
         ds = ds.shuffle(
             self.n_train_samples + 2)  # TODO, enough to just take more, or does it need to be something specific?
 
-        # options = tf.data.Options()
-        # options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.FILE
-        # ds = ds.with_options(options)
         ds = ds.prefetch(1)  # tf.data.AUTOTUNE)
 
         # This has to now be batched using the local batch size, compared to the other pipeline where we first batch, then shard.
@@ -2328,14 +2339,12 @@ class alt_data_generator(data_generator_ae):
             self.batch_size // n_workers)
 
         if self.recombination and self.training:
-            for i in range(self.generations):
+            for _ in range(self.generations):
                 ds = ds.map(self.recombination_mapping_for_tf_record, num_parallel_calls=tf.data.AUTOTUNE)
         else:
             ds = ds.map(self.TFR_passthrough, num_parallel_calls=tf.data.AUTOTUNE)
 
         if self.contrastive == True:
-
-
             ds = ds.map(self.sparse_mapping_for_tf_record_contrastive, num_parallel_calls=tf.data.AUTOTUNE)
 
         else:
