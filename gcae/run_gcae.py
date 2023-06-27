@@ -86,7 +86,7 @@ gpus = tf.config.experimental.list_physical_devices('GPU')
 k_vec = [1,2,3,4,5]
 
 gpus = tf.config.experimental.list_physical_devices('GPU')
-tf.config.experimental.set_virtual_device_configuration(gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3500)])
+#tf.config.experimental.set_virtual_device_configuration(gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3500)])
 
 
 
