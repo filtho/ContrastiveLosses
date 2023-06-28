@@ -5,7 +5,7 @@ import csv
     This functions sets the necessary values in the TF_CONFIG environment variable. It contains information on the 
     cluster architectures, i.e, which workers are allocated for the job, and the worker for the current task. This has 
     been specifically been developed for using the SLURM task manager, and kind of hardcoded for the ouput given using 
-    the Berzelius supercomputer at NSC. It may be the case that this funciton does not work on other clusters without
+    the Berzelius supercomputer at NSC Linköping. It may be the case that this funciton does not work on other clusters without
     some changes. 
 
     Here, the outputted strings from the call  to os.environ["SLURM_JOB_NODELIST"], contains all the allocated 
@@ -38,11 +38,7 @@ import csv
 
         Start by at least assuming that we have the same number of gpus per node, I would have to make something special in the sbatch call if I would
         want to have say 7+5 gpus. Should possibly work in future. 
-
-
-
-
-        
+  
 """
 
 
@@ -132,37 +128,20 @@ def set_tf_config():
 
     for i in range(len(clust)):
         for j in range(num_gpus_per_node[i]):
-            #print(i)
             clust_with_ports.append(clust[i]+":"+port+str(j)) 
-            #print(clust[i])
-
-    num_workers = len(clust_with_ports)
-
-    if int(os.environ["SLURM_PROCID"])  ==0 :
-
-        print(clust_with_ports)
-
-    clust_with_ports = []
-
-    for i in range(len(clust)):
-        for j in range(num_gpus_per_node[i]):
-            #print(i)
-            clust_with_ports.append(clust[i]+":"+port+str(j)) 
-            #print(clust[i])
 
     num_workers = len(clust_with_ports)
 
 
     if int(os.environ["SLURM_PROCID"])  ==0 :
 
-        print(clust_with_ports)
+        print(f"Workers : {clust_with_ports}")
 
     
     t = os.environ["SLURMD_NODENAME"]
     # Find at which index the current Node is, if it is the first node in the job, this is appointed chief status. 
     # This is also used as an output from this function 
     ind = clust.index(t)* num_tasks + int(os.environ["SLURM_LOCALID"])
-    #print("ind: ", ind)
     if ind == 0 and int(os.environ["SLURM_PROCID"])==0:
         role = "worker"
         chief = t
@@ -195,7 +174,6 @@ def set_tf_config():
     addresses = [",".join(["grpc://" +str(ind)+ c for c in clust_with_ports])]
     addresses = [",".join(["grpc://" + c for c in clust_with_ports])]
 
-    #print(addresses)
     # Now we have the full tf config variable, write it to the os.environ to set it as a environment variable.
     os.environ['TF_CONFIG'] = json.dumps(cfg)
 

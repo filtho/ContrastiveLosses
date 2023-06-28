@@ -12,7 +12,9 @@
   "regularizer": {
     "reg_factor":1e-8,
     "module": "tf.keras.regularizers",
-    "class": "l2"
+    "class": "l2",
+    "box_factor": 1e-7,
+    "box_area": 40000
   },
 "lr_scheme": {
     "module": "tf.keras.optimizers.schedules", 

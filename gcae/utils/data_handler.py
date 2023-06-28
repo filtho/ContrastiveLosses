@@ -1108,7 +1108,8 @@ class alt_data_generator(data_generator_ae):
         self.baseline_concordance_pop_informed = None
         self.baseline_concordance_superpop_informed = None
         self.baseline_concordance = None
-        self.baseline_concordances_k_mer = None
+        #self.baseline_concordances_k_mer = None
+
         if decode_only:
             # need to define the encoded values from which we want to reconstruct orignal data.
             # Pass this as some sort of argument in the future.
@@ -2068,19 +2069,19 @@ class alt_data_generator(data_generator_ae):
 
 
         if compute_class_conc: # Note, right now hardcoded to word for HumanOrigins dataset.
-            pass
-        #superpops = tf.convert_to_tensor(pd.read_csv("example_tiny/HO_superpopulations", header=None).to_numpy())
-        superpops = tf.convert_to_tensor(pd.read_csv("Data/dog/dog_superpopulations", header=None, encoding= "utf-8").to_numpy(), dtype = tf.string)
+        
+            #superpops = tf.convert_to_tensor(pd.read_csv("example_tiny/HO_superpopulations", header=None).to_numpy())
+            superpops = tf.convert_to_tensor(pd.read_csv("Data/dog/dog_superpopulations", header=None, encoding= "utf-8").to_numpy(), dtype = tf.string)
 
-        temp_superpop = tf.zeros((tf.shape(tf.unique(superpops[:, 1])[0])[0], self.n_markers, 3))
-        temp_pop = tf.zeros((tf.shape(tf.unique(superpops[:, 0])[0])[0], self.n_markers, 3), dtype = tf.int32)
+            temp_superpop = tf.zeros((tf.shape(tf.unique(superpops[:, 1])[0])[0], self.n_markers, 3))
+            temp_pop = tf.zeros((tf.shape(tf.unique(superpops[:, 0])[0])[0], self.n_markers, 3), dtype = tf.int32)
 
-        superpop_counts = tf.zeros((tf.shape((tf.unique(superpops[:, 1])[0]))[0], 1))
+            superpop_counts = tf.zeros((tf.shape((tf.unique(superpops[:, 1])[0]))[0], 1))
 
-        pop_counts = tf.zeros((tf.shape(tf.unique(superpops[:, 0])[0])[0], 1))
+            pop_counts = tf.zeros((tf.shape(tf.unique(superpops[:, 0])[0])[0], 1))
 
 
-        print("Calibrating data scaler for normalization, remember to fix this. In prep_normalizer. Note in the function def.")
+        #print("Calibrating data scaler for normalization, remember to fix this. In prep_normalizer. Note in the function def.")
         if True or self.normalization_mode == "standard" or self.normalization_mode == "smartPCAstyle" or self.impute_missing is True:
 
             for batch_data, batch_label, _ in ds:
@@ -2152,7 +2153,7 @@ class alt_data_generator(data_generator_ae):
                     baseline_concordances_k_mer = tf.concat([baseline_concordances_k_mer, [
                         tf.reduce_mean(tf.reduce_prod(tf.stack([p_cor2[i:-k + i, 0] for i in range(k)]), axis=0))]],
                                                             axis=0)
-
+           
             self.baseline_concordances_k_mer = baseline_concordances_k_mer
 
             #This below is the how often we are correct if we choose most common variant, for all snp values
@@ -2294,31 +2295,32 @@ class alt_data_generator(data_generator_ae):
         else:
             outdir = "Data/temp/" +mode+ "/"
 
+    
+
+        ds = tf.data.Dataset.from_generator(self.generator_for_tf_record,
+                                            output_signature=(
+                                                tf.TensorSpec(shape=(self.n_markers, None), dtype=tf.float32),
+                                                tf.TensorSpec(shape=(None, 2), dtype=tf.string),
+                                                tf.TensorSpec(shape=(2,), dtype=tf.bool)),
+                                            args=[pref_chunk_size, training, shuffle,n_workers])
+
+
+        if mode == "training" or mode == "project":
+            self.scaler = StandardScaler()
+            self.scaler.mean_ = 0
+            self.scaler.var = 1
+            self.prep_normalizer(ds)  # This generates the needed scalers for normalization´using standard and smartPCAstyle
+        ds = ds.map(self.normalize_mapping_for_tf_record, num_parallel_calls=1)  # tf.data.AUTOTUNE)
+        if "SLURM_JOBID" in os.environ:
+            if int(os.environ["SLURM_LOCALID"]) != 0:
+                time.sleep(10)
+                print("proc", int(os.environ["SLURM_PROCID"]) , "sleeping for 10 wating for data file creation by chief.")
+
+            #else:
+            #    print(" Chief:",  int(os.environ["SLURM_PROCID"]), int(os.environ["SLURM_LOCALID"])    )
+            #print("localid: ", int(os.environ["SLURM_LOCALID"]))
+       
         if not os.path.isdir(outdir ):
-
-            ds = tf.data.Dataset.from_generator(self.generator_for_tf_record,
-                                                output_signature=(
-                                                    tf.TensorSpec(shape=(self.n_markers, None), dtype=tf.float32),
-                                                    tf.TensorSpec(shape=(None, 2), dtype=tf.string),
-                                                    tf.TensorSpec(shape=(2,), dtype=tf.bool)),
-                                                args=[pref_chunk_size, training, shuffle,n_workers])
-
-
-            if mode == "training" or mode == "project":
-                self.scaler = StandardScaler()
-                self.scaler.mean_ = 0
-                self.scaler.var = 1
-                self.prep_normalizer(ds)  # This generates the needed scalers for normalization´using standard and smartPCAstyle
-            print("prep normalizer done")
-            ds = ds.map(self.normalize_mapping_for_tf_record, num_parallel_calls=1)  # tf.data.AUTOTUNE)
-            if "SLURM_JOBID" in os.environ:
-                if int(os.environ["SLURM_LOCALID"]) != 0:
-                    time.sleep(10)
-                    print("proc", int(os.environ["SLURM_PROCID"]) , "sleeping for 10 wating for data file creation by chief.")
-
-                else:
-                    print(" Chief:",  int(os.environ["SLURM_PROCID"]), int(os.environ["SLURM_LOCALID"])    )
-                print("localid: ", int(os.environ["SLURM_LOCALID"]))
             #write_genotypes_to_tfr_long(self, dataset=ds,out_dir = outdir,filename = self.filebase.split("/")[-1],n_markers = self.n_markers,n_workers = n_workers,mode=mode)
 
             #write_genotypes_to_tfr_long_one_sample(self, dataset=ds,out_dir = outdir,filename = self.filebase.split("/")[-1], n_workers = n_workers,mode=mode)

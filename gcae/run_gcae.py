@@ -319,6 +319,8 @@ class Autoencoder(Model):
             # and the next layer, which is sigmoid, is the actual encoding.
             if layer_name == "encoded_raw":
                 encoded_data_pure = x
+                #encoded_data_pure = tf.keras.layers.Activation('linear', dtype='float32')(x) # This is to ascertain that the output has dtyoe float32. With mixed precision the computations are done in float16.
+
                 #tf.print(tf.reduce_max(tf.math.abs(x)), tf.reduce_max(x), tf.reduce_min(x), tf.reduce_mean(x[:,0]))
 
 
@@ -383,7 +385,7 @@ class Autoencoder(Model):
 
             #reg_loss = self.regularizer["reg_factor"] * (box_factor* tf.reduce_sum(tf.math.maximum(tf.constant(0.), tf.square(encoded_data_pure) - 1 * box_area))) #  + 0.* dist_penalty+  0.* tf.reduce_sum(50 * ( -self.cell_lock*0.05 + tf.math.maximum(self.cell_lock*0.05,tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/period))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/period))))))) #  / tf.math.abs(tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))   )  ))
             #reg_loss = self.regularizer["reg_factor"] * tf.reduce_sum(tf.math.maximum(0., tf.square(encoded_data_pure) - 1 * 40000.))
-            reg_loss =  (box_factor* tf.reduce_sum(tf.math.maximum(tf.constant(0.), tf.square(encoded_data_pure) - 1 * box_area))) / box_area / tf.cast(tf.shape(encoded_data_pure)[0], tf.float32) #  + 0.* dist_penalty+  0.* tf.reduce_sum(50 * ( -self.cell_lock*0.05 + tf.math.maximum(self.cell_lock*0.05,tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/period))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/period))))))) #  / tf.math.abs(tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))   )  ))
+            reg_loss =  (box_factor* tf.reduce_sum(tf.math.maximum(tf.constant(0.), tf.square(encoded_data_pure) - 1 * box_area))) /box_area / tf.cast(tf.shape(encoded_data_pure)[0], tf.float32) #  + 0.* dist_penalty+  0.* tf.reduce_sum(50 * ( -self.cell_lock*0.05 + tf.math.maximum(self.cell_lock*0.05,tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/period))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/period))))))) #  / tf.math.abs(tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))   )  ))
 
             #tf.print(tf.reduce_sum( 1 + 1 * tf.math.maximum(0.0,tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))))) #  / tf.math.abs(tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))   )  ))
             #tf.print(tf.reduce_sum(tf.math.maximum(0., tf.square(encoded_data_pure) - 1 * 100)))
@@ -448,6 +450,7 @@ class Autoencoder(Model):
             self.add_loss(reploss)
 
         x = tf.keras.layers.Activation('linear', dtype='float32')(x) # This is to ascertain that the output has dtyoe float32. With mixed precision the computations are done in float16.
+        encoded_data = tf.keras.layers.Activation('linear', dtype='float32')(encoded_data) # This is to ascertain that the output has dtyoe float32. With mixed precision the computations are done in float16.
 
         return x, encoded_data
 
@@ -621,8 +624,8 @@ def save_weights(prefix, model):
 
 def main():
     chief_print(f"tensorflow version {tf.__version__}")
-    #tf.keras.backend.set_floatx('float16')
-    mixed_precision.set_global_policy('mixed_float16')
+    tf.keras.backend.set_floatx('float32')
+    #mixed_precision.set_global_policy('mixed_float16')
 
     try:
         arguments = docopt(__doc__, version='GenoAE 1.0')
@@ -666,13 +669,13 @@ def main():
             if not isChief:
                 print("Work has ended for this worker, now relying only on the Chief :)")
                 exit(0)
-            tf.print(tf.config.list_physical_devices(device_type='GPU'))
-            tf.print(tf.test.gpu_device_name())
+            #tf.print(tf.config.list_physical_devices(device_type='GPU'))
+            #tf.print(tf.test.gpu_device_name())
             num_physical_gpus = len(tf.config.list_physical_devices(device_type='GPU'))
 
-            chief_print(tf.config.list_physical_devices(device_type='GPU'))
+            #chief_print(tf.config.list_physical_devices(device_type='GPU'))
             gpus = ["gpu:"+ str(i) for i in range(num_physical_gpus)]
-            chief_print(gpus)
+            #chief_print(gpus)
             strategy =  tf.distribute.MirroredStrategy(devices = gpus, cross_device_ops=tf.distribute.NcclAllReduce())
 
             slurm_job = 0
@@ -684,11 +687,9 @@ def main():
         num_workers = 1
 
         strategy =  tf.distribute.MirroredStrategy()
-        chief_print(tf.config.list_physical_devices(device_type='GPU'))
+        #chief_print(tf.config.list_physical_devices(device_type='GPU'))
 
-    chief_print("slurm_job" + str(slurm_job))
-    print(isChief)
-
+    #chief_print("slurm_job" + str(slurm_job))
     num_devices = strategy.num_replicas_in_sync
     chief_print('Number of devices: {}'.format(num_devices))
 
@@ -1013,7 +1014,6 @@ def main():
         loss_def = train_opts["loss"]
 
         if loss_def["module"] == "tf.keras.losses":
-            print("tf keras loss")
 
             loss_class = getattr(eval(loss_def["module"]), loss_def["class"])
             if "args" in loss_def.keys():
@@ -1759,6 +1759,13 @@ def main():
         if use_new:
             ds = data.create_dataset_tf_record(chunk_size, "training",n_workers = num_workers) #, device_id = device_id)
 
+            if _isChief() and not contrastive:
+
+                tf.print("Baseline concordance:", data.baseline_concordance)
+                for i in range(5):
+                    tf.print("Baseline concordance {}-mer:".format(k_vec[i]), data.baseline_concordances_k_mer[i])
+
+
             def dataset_fn_train(input_context):
                 #device_id = input_context.input_pipeline_id
                 return data.create_dataset_tf_record(chunk_size, "training",n_workers = num_workers, shuffle=False) #, device_id = device_id)
@@ -1789,11 +1796,6 @@ def main():
                 ds_validation = data.create_dataset_tf_record(chunk_size, "validation", n_workers=num_workers, shuffle=False)
                 dds_validation = strategy.experimental_distribute_dataset(ds_validation)
 
-        if _isChief() and not contrastive:
-
-            tf.print("Baseline concordance:", data.baseline_concordance)
-            for i in range(5):
-                tf.print("Baseline concordance {}-mer:".format(k_vec[i]), data.baseline_concordances_k_mer[i])
 
         with strategy.scope():
             # Initialize the model and optimizer
@@ -1820,7 +1822,6 @@ def main():
                 pass
             else:
                 input_test, _, _ = next(ds.as_numpy_iterator())
-            #input_test2 = np.zeros(shape = (2,n_markers,2))
             _, _ = autoencoder(input_test[:,:,:], is_training = False, verbose = True)
 
             if resume_from:
@@ -2026,7 +2027,7 @@ def main():
 
             chief_print("Epoch: {}/{}...".format(effective_epoch, epochs+resume_from))
             chief_print("--- Train loss: {:.4f} Concordance {:.4f} time: {}".format(train_loss_this_epoch, train_conc_this_epoch_k_mer[0,0],  train_time))
-            chief_print("Learning rate: {}".format(lr_schedule(optimizer.iterations)))
+            #chief_print("Learning rate: {}".format(lr_schedule(optimizer.iterations)))
             if n_valid_samples > 0:
 
                 startTime = datetime.now()
@@ -2433,6 +2434,8 @@ def main():
 
 
         def compute_and_save_binned_conc(pred,true,name):
+            #TODO: This has an error right now that I have not had time to check. Do not use 
+            chief_print("WARNING: Using function \"compute_and_save_binned_conc\", this has an unfixed error and should not be used. ")
             c0 = np.sum(((pred-true==0) * (true==0)).astype(int),axis = 0) # How many are predicted correctly, and are genotype 0, per SNP
             c1 = np.sum(((pred-true==0) * (true==1)).astype(int),axis = 0) # How many are predicted correctly, and are genotype 1, per SNP
             c2 = np.sum(((pred-true==0) * (true==2)).astype(int),axis = 0) # How many are predicted correctly, and are genotype 2, per SNP
@@ -2560,7 +2563,7 @@ def main():
             pred = 2 *(tf.cast(tf.argmax(alfreqvector(decoded_train[np.squeeze(pop_inds), 0:n_markers]), axis = -1), tf.float32) * 0.5).numpy()
             true = 2* targets_train[np.squeeze(pop_inds),:]
 
-            if not contrastive:
+            if not contrastive and False:
 
                 compute_and_save_binned_conc(pred,true,name ="binned_concordances" )
                 compute_and_save_binned_conc(pred[data_project.sample_idx_train,:],true[data_project.sample_idx_train,:],name ="binned_concordances_train" )
@@ -2726,7 +2729,7 @@ def main():
                 plt.legend(prop={'size': 8})
                 plt.savefig(results_directory+"/" + save_name+ ".pdf")
 
-            if not contrastive:
+            if not contrastive and False:
 
                 plot_binned_conc("binned_concordances", "test_binned_conc2")
                 plot_binned_conc("binned_concordances_train", "binned_concordances_train")
