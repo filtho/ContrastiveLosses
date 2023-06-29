@@ -1754,48 +1754,37 @@ def main():
         chief_print("-----------------------------")
 
         chunk_size = 5 * data.batch_size
-        use_new = 1
         data.encoded_things = tf.convert_to_tensor([np.tile(np.array([0,0]), (n_train_samples,1))])
-        if use_new:
-            ds = data.create_dataset_tf_record(chunk_size, "training",n_workers = num_workers) #, device_id = device_id)
+        ds = data.create_dataset_tf_record(chunk_size, "training",n_workers = num_workers) #, device_id = device_id)
 
-            if _isChief() and not contrastive:
+        if _isChief() and not contrastive:
 
-                tf.print("Baseline concordance:", data.baseline_concordance)
-                for i in range(5):
-                    tf.print("Baseline concordance {}-mer:".format(k_vec[i]), data.baseline_concordances_k_mer[i])
+            tf.print("Baseline concordance:", data.baseline_concordance)
+            for i in range(5):
+                tf.print("Baseline concordance {}-mer:".format(k_vec[i]), data.baseline_concordances_k_mer[i])
 
 
-            def dataset_fn_train(input_context):
+        def dataset_fn_train(input_context):
+            #device_id = input_context.input_pipeline_id
+            return data.create_dataset_tf_record(chunk_size, "training",n_workers = num_workers, shuffle=False) #, device_id = device_id)
+
+        input_options = tf.distribute.InputOptions(
+                experimental_place_dataset_on_device = False,
+                experimental_fetch_to_device = True,
+                experimental_replication_mode = tf.distribute.InputReplicationMode.PER_WORKER,
+                experimental_per_replica_buffer_size = 1)
+
+        dds = strategy.distribute_datasets_from_function(dataset_fn_train,input_options )
+        if n_valid_samples > 0:
+            ds_validation = data.create_dataset_tf_record(chunk_size, "validation",n_workers = num_workers) #, device_id = device_id)
+
+            def dataset_fn_validation(input_context):
                 #device_id = input_context.input_pipeline_id
-                return data.create_dataset_tf_record(chunk_size, "training",n_workers = num_workers, shuffle=False) #, device_id = device_id)
-
-            input_options = tf.distribute.InputOptions(
-                    experimental_place_dataset_on_device = False,
-                    experimental_fetch_to_device = True,
-                    experimental_replication_mode = tf.distribute.InputReplicationMode.PER_WORKER,
-                    experimental_per_replica_buffer_size = 1)
-
-            dds = strategy.distribute_datasets_from_function(dataset_fn_train,input_options )
-            if n_valid_samples > 0:
-                ds_validation = data.create_dataset_tf_record(chunk_size, "validation",n_workers = num_workers) #, device_id = device_id)
-
-                def dataset_fn_validation(input_context):
-                    #device_id = input_context.input_pipeline_id
-                    return data.create_dataset_tf_record(chunk_size, "validation", n_workers=num_workers,
-                                                        shuffle=False)  # , device_id = device_id)
+                return data.create_dataset_tf_record(chunk_size, "validation", n_workers=num_workers,
+                                                    shuffle=False)  # , device_id = device_id)
 
 
-                dds_validation = strategy.distribute_datasets_from_function(dataset_fn_validation, input_options)
-
-        else:
-
-            ds = data.create_dataset(chunk_size, "training")
-            dds = strategy.experimental_distribute_dataset(ds)
-            if n_valid_samples > 0:
-                ds_validation = data.create_dataset_tf_record(chunk_size, "validation", n_workers=num_workers, shuffle=False)
-                dds_validation = strategy.experimental_distribute_dataset(ds_validation)
-
+            dds_validation = strategy.distribute_datasets_from_function(dataset_fn_validation, input_options)
 
         with strategy.scope():
             # Initialize the model and optimizer
@@ -1816,13 +1805,10 @@ def main():
                 #optimizer = tf.optimizers.Nadam(learning_rate = 0.01) # , beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
 
             optimizer2 = tf.optimizers.Adam(learning_rate = lr_schedule, beta_1=0.99, beta_2 = 0.999)
-            if use_new:
 
-                input_test, _, _,_,_ = next(ds.as_numpy_iterator())
-                pass
-            else:
-                input_test, _, _ = next(ds.as_numpy_iterator())
-            _, _ = autoencoder(input_test[:,:,:], is_training = False, verbose = True)
+            input_test, _, _,_,_ = next(ds.as_numpy_iterator())
+                
+          
 
             if resume_from:
                 chief_print("\n______________________________ Resuming training from epoch {0} ______________________________".format(resume_from))
@@ -1890,14 +1876,9 @@ def main():
         samples_seen = 0
 
         profile = 0
-        if use_new:
 
-            for batch_dist_input, batch_dist_target, poplist, _ , _ in ds :
-                samples_seen += tf.shape(batch_dist_input)[0]
-        else:
-
-            for batch_dist_input, batch_dist_target, poplist in ds :
-                samples_seen += tf.shape(batch_dist_input)[0]
+        for batch_dist_input, batch_dist_target, poplist, _ , _ in ds :
+            samples_seen += tf.shape(batch_dist_input)[0]
 
 
         if "SLURM_PROCID" in os.environ:
@@ -2391,39 +2372,24 @@ def main():
         data.batch_size = batch_size_project
         chunk_size = 5 * data.batch_size
         pheno_train = None
-        # HERE WE NEED TO "NOT SHUFFLE" THE DATASET, IN ORDER TO GET EVALUATE TO WORK AS INTENDED (otherwise, there is a problem with the ordering, works on its own,
-        # but works differently when directly compared to original implementation)
+     
 
-        # For distributed project, I am not sure that I can guarantee that the samples will be placed in the correct (unshuffled) order.
-        # For this, we can probalby just read the fam file, and utilize the split made from data_project, to identify the correct indices
-
-
-        # poplist = pd.read_csv("Data/HumanOrigins2067_filtered.fam", header=None).to_numpy()
-
-        use_new = 1
         data.encoded_things = tf.convert_to_tensor([np.tile(np.array([0,0]), (2067,1))])
 
-        if use_new:
-            ds = data.create_dataset_tf_record(chunk_size, "project",n_workers=num_workers)
+        ds = data.create_dataset_tf_record(chunk_size, "project",n_workers=num_workers)
 
-            def dataset_fn_project(input_context):
+        def dataset_fn_project(input_context):
 
-                return data.create_dataset_tf_record(chunk_size, "project", n_workers=num_workers,
-                                                     shuffle=True)
+            return data.create_dataset_tf_record(chunk_size, "project", n_workers=num_workers,
+                                                    shuffle=True)
 
-            input_options = tf.distribute.InputOptions(
-                experimental_place_dataset_on_device=False,
-                experimental_fetch_to_device=True,
-                experimental_replication_mode=tf.distribute.InputReplicationMode.PER_WORKER,
-                experimental_per_replica_buffer_size=1)
+        input_options = tf.distribute.InputOptions(
+            experimental_place_dataset_on_device=False,
+            experimental_fetch_to_device=True,
+            experimental_replication_mode=tf.distribute.InputReplicationMode.PER_WORKER,
+            experimental_per_replica_buffer_size=1)
 
-            dds = strategy.distribute_datasets_from_function(dataset_fn_project, input_options)
-
-        else:
-            ds = data.create_dataset(chunk_size, "training")
-            dds = strategy.experimental_distribute_dataset(ds)
-
-
+        dds = strategy.distribute_datasets_from_function(dataset_fn_project, input_options)
 
         autoencoder.noise_std = 0
 
@@ -2560,10 +2526,10 @@ def main():
             encoded_train = np.array(encoded_train)
             encoded_train_to_write = np.array(encoded_train_to_write)
 
-            pred = 2 *(tf.cast(tf.argmax(alfreqvector(decoded_train[np.squeeze(pop_inds), 0:n_markers]), axis = -1), tf.float32) * 0.5).numpy()
-            true = 2* targets_train[np.squeeze(pop_inds),:]
 
             if not contrastive and False:
+                pred = 2 *(tf.cast(tf.argmax(alfreqvector(decoded_train[np.squeeze(pop_inds), 0:n_markers]), axis = -1), tf.float32) * 0.5).numpy()
+                true = 2* targets_train[np.squeeze(pop_inds),:]
 
                 compute_and_save_binned_conc(pred,true,name ="binned_concordances" )
                 compute_and_save_binned_conc(pred[data_project.sample_idx_train,:],true[data_project.sample_idx_train,:],name ="binned_concordances_train" )
