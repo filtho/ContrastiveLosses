@@ -88,7 +88,11 @@ k_vec = [1,2,3,4,5]
 gpus = tf.config.experimental.list_physical_devices('GPU')
 #tf.config.experimental.set_virtual_device_configuration(gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3500)])
 
-
+enable_mixed_precision = True
+if enable_mixed_precision:
+    my_type = tf.float16
+else:
+    my_type = tf.float32
 
 
 def chief_print(string):
@@ -248,8 +252,9 @@ class Autoencoder(Model):
 
         if self.marker_spec_var:
             random_uniform = tf.random_uniform_initializer()
-            self.ms_variable = tf.Variable(random_uniform(shape = (1, n_markers), dtype=tf.float32))#, name="marker_spec_var")
-            self.nms_variable = tf.Variable(random_uniform(shape = (1, n_markers), dtype=tf.float32))#, name="nmarker_spec_var")
+            self.ms_variable = tf.Variable(random_uniform(shape = (1, n_markers), dtype=my_type))#, name="marker_spec_var")
+            self.nms_variable = tf.Variable(random_uniform(shape = (1, n_markers), dtype=my_type))#, name="nmarker_spec_var")
+
         else:
             chief_print("No marker specific variable.")
 
@@ -319,7 +324,7 @@ class Autoencoder(Model):
             # and the next layer, which is sigmoid, is the actual encoding.
             if layer_name == "encoded_raw":
                 encoded_data_pure = x
-                #encoded_data_pure = tf.keras.layers.Activation('linear', dtype='float32')(x) # This is to ascertain that the output has dtyoe float32. With mixed precision the computations are done in float16.
+                encoded_data_pure = tf.keras.layers.Activation('linear', dtype='float32')(x) # This is to ascertain that the output has dtyoe float32. With mixed precision the computations are done in float16.
 
                 #tf.print(tf.reduce_max(tf.math.abs(x)), tf.reduce_max(x), tf.reduce_min(x), tf.reduce_mean(x[:,0]))
 
@@ -341,6 +346,7 @@ class Autoencoder(Model):
                 if self.noise_std and not have_encoded_raw:
 
                     encoded_data_pure = x
+                    encoded_data_pure = tf.keras.layers.Activation('linear', dtype='float32')(x) # This is to ascertain that the output has dtyoe float32. With mixed precision the computations are done in float16.
 
                     x = self.noise_layer(x, training = is_training)
 
@@ -625,8 +631,10 @@ def save_weights(prefix, model):
 def main():
     chief_print(f"tensorflow version {tf.__version__}")
     tf.keras.backend.set_floatx('float32')
-    #mixed_precision.set_global_policy('mixed_float16')
 
+    if enable_mixed_precision:
+        mixed_precision.set_global_policy('mixed_float16')
+        
     try:
         arguments = docopt(__doc__, version='GenoAE 1.0')
     except DocoptExit:
@@ -1807,7 +1815,8 @@ def main():
             optimizer2 = tf.optimizers.Adam(learning_rate = lr_schedule, beta_1=0.99, beta_2 = 0.999)
 
             input_test, _, _,_,_ = next(ds.as_numpy_iterator())
-                
+            _, _ = autoencoder(input_test[:,:,:], is_training = False, verbose = True)
+
           
 
             if resume_from:
@@ -1825,13 +1834,13 @@ def main():
         #    valid_writer = tf.summary.create_file_writer(train_directory + '/valid')
         ######################################################
 
-        if _isChief() and False:
+        if _isChief():
             tf.print(autoencoder.summary())
 
             memory_info = tf.config.experimental.get_memory_info('GPU:0')
 
-            tf.print(memory_info["current"])
-            tf.print(memory_info["peak"])
+            #tf.print(memory_info["current"])
+            #tf.print(memory_info["peak"])
 
         # train losses per epoch
         losses_t = []
@@ -2598,7 +2607,7 @@ def main():
                     true_genotypes = targets_train
                     genotype_concordance_metric.update_state(y_pred = genotypes_output[orig_nonmissing_mask], y_true = true_genotypes[orig_nonmissing_mask])
 
-                elif train_opts["loss"]["class"] in ["CategoricalCrossentropy", "KLDivergence"] and data_opts["norm_mode"] == "genotypewise01":
+                elif train_opts["loss"]["class"] in ["CategoricalCrossentropy", "KLDivergence"] and data_opts["norm_mode"] == "genotypewise01" and False:
                     if alt_data is None:
                         genotypes_output = tf.cast(tf.argmax(alfreqvector(decoded_train[:, 0:n_markers]), axis = -1), tf.float32) * 0.5
                         true_genotypes = targets_train
