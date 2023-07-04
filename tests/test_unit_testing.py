@@ -117,5 +117,8 @@ def test_loss_basic_properties():
 
             assert L1 <= L2, f"Loss {clsmember[0]} failed the test"
 
-
+test_negatives_by_distance()
+test_number_of_pair()
+test_loss_overflow()
+test_weighted_random()
 test_loss_basic_properties()
