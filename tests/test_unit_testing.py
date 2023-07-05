@@ -79,11 +79,6 @@ def test_weighted_random():
             y = np.where(np.sum((anchors - x) == 0, axis =1)==2 )
 
             count[y] +=1
-    #print(count)
-    
-    #plt.figure()
-    #plt.bar(np.arange(tf.shape(anchors)[0]),count)
-    #plt.savefig("test.png")
 
     assert count[4] != 0 and count[0] ==0 and count[1] > count[3] and count[3] > count[4]
 
@@ -116,6 +111,3 @@ def test_loss_basic_properties():
             L2 = loss_function.compute_loss(A,S2,tf.concat([A, S1], axis = 0))
 
             assert L1 <= L2, f"Loss {clsmember[0]} failed the test"
-
-
-test_loss_basic_properties()
