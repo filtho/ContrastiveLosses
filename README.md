@@ -1,5 +1,5 @@
 # ContrastiveLosses
-Implementations and examples of use cases of loss functions used in contrastive representation learning.
+Implementations and examples of use cases of loss functions used in contrastive representation learning. The implementations of the loss functions are found in contrastive_losses.py. 
 
 Implemented in TensorFlow, orginally for use in genetic data, here shown for other applications as well.
 ### Computational Environment
@@ -21,10 +21,38 @@ As an alternative, the file requirements.txt contains the needed packages. Creat
 will install the packages needed to run the code.
 
 
-## Command line interface
-The program `run_CL.py` is called for all implemented examples, at the time of writing MNIST and Cifar10.
 
-To run, the user need to state whether we want to train a model anew or to plot already saved model states, which dataset to run, and where to save the logs. 
+# Example on Genetic data:
+## Command line interface
+
+
+The program `run_gcae.py` is called for examples of contrastive learning on genetic data.
+
+To run, the user need to state whether we want to train a model anew or to project already saved model states, among other parameters. This project is a continuation of [GenoCAE](https://github.com/kausmees/GenoCAE), see that page for a more detailed usage guide. This project shares essentially 
+the same API.
+For example, to train a model on the MNIST dataset, execute the following:
+
+`$ python run_gcae.py train --trainedmodeldir=./test  --datadir=Data/dog --model_id=CM_M1_2D --data=All_Pure_150k --train_opts_id=ex3_CL --data_opts_id=d_0_4_dog_cont --save_interval=5 --epochs=100`
+
+There is also an optional argument to restart training from a previously saved state, by appending the `--load_path=/path_to_saved_model` argument.
+
+To plot results for saved model states in a directory and evaluate the KNN-classification accuracy, run 
+
+`$python run_gcae.py project --trainedmodeldir=./test  --datadir=Data/dog --model_id=CM_M1_2D --data=All_Pure_150k --train_opts_id=ex3_CL --data_opts_id=d_0_4_dog_cont --superpops=Data/dog/dog_superpopulations`
+
+
+![Results on Dog dataset](gcae/animated.gif)
+
+
+## Getting the data:
+The data used in this example is described in [this paper](https://pubmed.ncbi.nlm.nih.gov/28445722/), and the data can be obtained by running 
+
+`$wget ftp://ftp.nhgri.nih.gov/pub/outgoing/dog_genome/SNP/2017-parker-data/*`
+
+Place these files in the Data folder, and then run the above commands. The accompanying file dog_superpopulations corresponds to this specific dataset.
+# Examples for image data
+## Command line interface
+the same CLI.
 
 For example, to train a model on the MNIST dataset, execute the following:
 
