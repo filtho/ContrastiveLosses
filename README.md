@@ -50,6 +50,14 @@ The data used in this example is described in [this paper](https://pubmed.ncbi.n
 `$wget ftp://ftp.nhgri.nih.gov/pub/outgoing/dog_genome/SNP/2017-parker-data/*`
 
 Place these files in the Data folder, and then run the above commands. The accompanying file dog_superpopulations corresponds to this specific dataset.
+
+## Some notes:
+
+Depending on the hardware setup, some minor changes may need to be made for the code to run. One issue could be the GPU running out of memory. Reducing the batch size in the train_opts file could be one fix. For my current setup, I had to explicitly allocate more memory than tensorflow automatically did. This can be done by adding the line 
+`tf.config.experimental.set_virtual_device_configuration(gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3500)])`
+a VRAM of 3.5GB should be enough to run the example with the current settings. On my machine, one training epoch takes ~25 seconds.
+
+
 # Examples for image data
 ## Command line interface
 the same CLI.
