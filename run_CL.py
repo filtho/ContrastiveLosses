@@ -469,7 +469,7 @@ if __name__ == '__main__':
                 save_interval =  config["save_interval"]
                 learning_rate = config["learning_rate"]
             else:
-                loss_func = CL.centroid_loss(n_pairs = 20,mode = 'distance_weighted_random', distance = "L2")
+                loss_func = CL.centroid(n_pairs = 20,mode = 'distance_weighted_random', distance = "L2")
                 epochs =    100
                 local_batch_size = 200
                 batch_size = local_batch_size * num_devices
