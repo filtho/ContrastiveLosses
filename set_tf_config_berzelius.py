@@ -66,19 +66,21 @@ def set_tf_config():
             else:
                 s4.append(i)  # s3 = ["009","010","011","012","047"]
         #print(s4)
-
+    
+    
     # The node numbering is done using three digits, padded with zeros if necessary.
     number_of_zeros = [3 - len(i) for i in s4]
     clust = ["node" + "0" * i[0] + i[1] for i in zip(number_of_zeros, s4)]  # Clust =  ["Node009","Node010","Node011","Node012", "Node047"]
 
-    # All of the above should hold most likely
+    """
+    All of the above should hold most likely
 
-    # Now, I want to know how many tasks we have. Could possibly want to use the env variable SLURM_TASKS_PER_NODE
+    Now, I want to know how many tasks we have. Could possibly want to use the env variable SLURM_TASKS_PER_NODE
 
-    # This may be good as well SLURM_LOCALID
+    This may be good as well SLURM_LOCALID
 
-    # I assume that I would need to open different ports for different processes
-
+    I assume that I would need to open different ports for different processes
+    """
 
     port ="888"  # Choose a port number to use, use 888 as base, the processes will then have ports 8880, 8881, 8882, etc
 
