@@ -2,3 +2,4 @@
 Examples/
 Results/
 saved_model/
+*.out
