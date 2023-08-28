@@ -13,7 +13,7 @@ import os
 import time
 from docopt import docopt, DocoptExit
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0' 
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
 
 if "SLURM_NTASKS_PER_NODE" in os.environ:
 	if int(os.environ["SLURM_NTASKS_PER_NODE"]) > 1:
@@ -321,14 +321,14 @@ if __name__ == '__main__':
             x = tf.keras.layers.Dense(75)(x)
 
             outputs = tf.keras.layers.Dense(2)(x)
-            outputs = tf.keras.layers.GaussianNoise(stddev=2/9)(outputs) # 4.66
+            outputs = tf.keras.layers.GaussianNoise(stddev= 2/ 9 )(outputs) # 4.66 , 2/ 9 used for all experiments in report
             self.model = tf.keras.Model(inputs=inputs, outputs=(outputs, x), name="Model")
 
         def call(self, inputs, repr = False):
             encoding, x = self.model(inputs)
             
             
-            reg_loss = 1e-1 * tf.reduce_sum(tf.math.maximum(0., tf.square(encoding) - 1 * 40000.) / 40000.) / tf.cast(tf.shape(encoding)[0], tf.float32)
+            reg_loss = 200 * 1e-1 * tf.reduce_sum(tf.math.maximum(0., tf.square(encoding) - 1 * 40000.) / 40000.) / tf.cast(tf.shape(encoding)[0], tf.float32)
             #reg_loss = 1e-1 * tf.reduce_sum(tf.math.maximum(0., tf.square(encoding[:,0]) - 1 * 250000.)/250000.+ tf.math.maximum(0., tf.square(encoding[:,1]) -  40000.) / 40000.) / tf.cast(tf.shape(encoding)[0], tf.float32)
 
 
@@ -521,11 +521,11 @@ if __name__ == '__main__':
                 suffix = ""
 
             logs = save_dir+ "/logdir/"  + datetime.now().strftime("%Y%m%d-%H%M%S") +"_"+ suffix
-            profile = 0  
+            profile = False
             if profile and e ==1: tf.profiler.experimental.start(logs)
             
             
-            if e%1 == 0 :
+            if e%50 == 0 :
                 
                 validation_embedding = None
                 validation_labels = None
@@ -578,7 +578,7 @@ if __name__ == '__main__':
 
             for input_data, input_label in dds:
                 current_batch += batch_size
-                
+
                 if _isChief():
                     # This can only be done on a single gpu run as of now. It dislikes transforming stuff that are already sdistributed
                     if current_batch%(batch_size*100000) == 0: # Save image of augmented samples and where they get mapped, used in development - checking augmentations.
@@ -695,7 +695,7 @@ if __name__ == '__main__':
         pca.fit(np.reshape(train_images, [num_samples, data_size**2*channels])[:num_samples, :])
         X_PCA = pca.transform(np.reshape(train_images, [num_samples, data_size**2*channels])[:num_samples, :])
         plt.figure()
-        scorePCA = compute_KNN_accuracy(X_PCA[:, 0:1], train_labels[:N])
+        scorePCA = compute_KNN_accuracy(X_PCA[:, 0:2], train_labels[:N])
 
         D = pd.DataFrame({"x": X_PCA[:, 0], "y": X_PCA[:, 1], "color": train_labels})
         sns.scatterplot(data=D, x="x", y="y", hue="color", palette=sns.color_palette("tab10"), legend="brief")
@@ -704,12 +704,12 @@ if __name__ == '__main__':
 
 
         chief_print(" PCA classification score: {}".format(scorePCA))
-        compute_KNN_accuracy(X_PCA[:, 0:1], train_labels[:N])
+        compute_KNN_accuracy(X_PCA[:, 0:2], train_labels[:N])
 
         N = 60000
         X_embedded = TSNE(n_components=2, learning_rate='auto',
                           init='random', perplexity=3).fit_transform(np.reshape(train_images, [num_samples, data_size**2*channels])[:N, :])
-        scoretsne = compute_KNN_accuracy(X_embedded[:, 0:1], train_labels[:N])
+        scoretsne = compute_KNN_accuracy(X_embedded[:, 0:2], train_labels[:N])
 
 
         chief_print(" t-SNE classification score: {}".format(scoretsne))

@@ -182,10 +182,13 @@ class ContrastiveLoss():
     def __call__(self, anchors, positives):
             
         if tf.distribute.has_strategy():
-            global_anchors, global_positives = self.gather_samples(anchors, positives)
+            #global_anchors, global_positives = self.gather_samples(anchors, positives)
 
-            loss =  ( self.compute_loss(anchors,positives, tf.stop_gradient(global_anchors)) + self.compute_loss(tf.stop_gradient(global_anchors),tf.stop_gradient(global_positives), anchors)  ) / 2
+            #num_devices = tf.distribute.get_replica_context().num_replicas_in_sync
 
+            #loss =  ( self.compute_loss(anchors,positives, tf.stop_gradient(global_anchors)) + self.compute_loss(tf.stop_gradient(global_anchors),tf.stop_gradient(global_positives), anchors) / num_devices  ) / 2
+            loss = self.compute_loss(anchors,positives,anchors)
+            #loss = self.compute_loss(anchors,positives, tf.stop_gradient(global_anchors))
         else:
             loss = self.compute_loss(anchors,positives,anchors)
     
@@ -237,7 +240,7 @@ class Triplet_loss(ContrastiveLoss):
 
 class n_pair(ContrastiveLoss):
     
-    def __init__(self, n_pairs = 20, alpha = 0., mode = 'distance_weighted_random', distance ="L2"):
+    def __init__(self, n_pairs = 20, alpha = 1., mode = 'distance_weighted_random', distance ="L2"):
         self.mode = mode
 
         self.alpha = alpha
@@ -263,14 +266,12 @@ class n_pair(ContrastiveLoss):
         N = self.generate_negatives(anchors,negative_pool)
 
         N_pairs = tf.shape(N)[1]
-        tf.print(tf.shape(N))
-        hehe = True
-        if hehe == False:
+        L2_distance_version = True
+        if L2_distance_version == True:
             anchor_pos = tf.reduce_sum((tf.tile(A[:,tf.newaxis,:], [1, N_pairs, 1]) - tf.tile(P[:,tf.newaxis,:], [1, N_pairs, 1]))**2, axis=2)
             anchor_neg = tf.reduce_sum((tf.tile(A[:,tf.newaxis,:], [1, N_pairs, 1]) - N)**2, axis=2)
             
             loss = tf.reduce_sum(tf.math.maximum( anchor_pos - anchor_neg+ self.alpha, 0 ) ) / tf.cast(N_pairs,tf.float32)
-            tf.print(loss)
         else:
             dot_pos = tf.reduce_sum((A * P), axis=1)
             dot_neg = tf.reduce_sum(tf.tile(A[:,tf.newaxis,:], [1, N_pairs, 1]) * N, axis=2)
@@ -344,8 +345,8 @@ class centroid(ContrastiveLoss):
 
         m = tf.reduce_max(tf.stack([num, denom], axis=-1), axis=-1)
 
-        loss = 1 / tf.cast(n, tf.float32) * tf.reduce_sum(tf.math.log(
-            1 + tf.reduce_sum(-tf.math.exp(-2.) + tf.math.exp(num - m) / (tf.math.exp(denom - m) + eps), axis=1)))
+        loss = tf.reduce_sum(tf.math.log(
+            1 + tf.reduce_sum(-tf.math.exp(-2.) + tf.math.exp(num - m) / (tf.math.exp(denom - m) + eps), axis=1)))#  *  1 / tf.cast(n, tf.float32)
 
 
         return loss
