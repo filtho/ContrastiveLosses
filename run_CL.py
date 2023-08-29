@@ -79,7 +79,7 @@ def compute_KNN_accuracy(data, labels, k = 3):
     Computes the knn-classification accuracy. 
     Assuming that data contains the coordinates for the samples, in the format [n_samples, dimension]
     """
-    knn = KNeighborsClassifier(n_neighbors=3)
+    knn = KNeighborsClassifier(n_neighbors=k)
     knn.fit(data, labels)
     score = knn.score(data,labels)
 
@@ -270,7 +270,7 @@ if __name__ == '__main__':
     marker_list = ["$0$", "$1$", "$2$","$3$", "$4$","$5$","$6$","$7$","$8$","$9$"]
     color_list  = ['blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 'black', 'white', 'gray', 'pink']
 
-    class dret(tf.keras.layers.Layer):
+    class concat_layer(tf.keras.layers.Layer):
 
         def call(self,inputs, training = True):
             if training:
@@ -321,7 +321,7 @@ if __name__ == '__main__':
             x = tf.keras.layers.Dense(75)(x)
 
             outputs = tf.keras.layers.Dense(2)(x)
-            outputs = tf.keras.layers.GaussianNoise(stddev= 2/ 9 )(outputs) # 4.66 , 2/ 9 used for all experiments in report
+            outputs = tf.keras.layers.GaussianNoise(stddev=  4.66 )(outputs) # 4.66 , 2/ 9 used for all experiments in report
             self.model = tf.keras.Model(inputs=inputs, outputs=(outputs, x), name="Model")
 
         def call(self, inputs, repr = False):
@@ -349,7 +349,7 @@ if __name__ == '__main__':
                 shift =tf.keras.layers.RandomTranslation(0.2,0.2,fill_mode='constant',fill_value = 0)
                 zoom = tf.keras.layers.RandomZoom(height_factor = [0.,0.7],width_factor=[0.,0.7],fill_mode='constant',interpolation='bilinear',seed=None,fill_value=0.0, )
 
-                inputs2 = dret()(inputs)
+                inputs2 = concat_layer()(inputs)
                 x = SnP()(shift(rot(zoom(inputs2))))
 
             elif arguments["--data"]=="fashion_mnist":
@@ -358,7 +358,7 @@ if __name__ == '__main__':
                 zoom = tf.keras.layers.RandomZoom(height_factor = [0.,0.7],width_factor=[0.,0.7],fill_mode='constant',interpolation='bilinear',seed=None,fill_value=0.0, )
                 flip = tf.keras.layers.RandomFlip(mode="horizontal")
 
-                inputs2 = dret()(inputs)
+                inputs2 = concat_layer()(inputs)
                 x = shift(rot(zoom(flip(inputs2))))
 
             elif arguments["--data"]=="cifar10":
@@ -369,7 +369,7 @@ if __name__ == '__main__':
                 contrast = tf.keras.layers.RandomContrast(factor=0.4)
                 flip = tf.keras.layers.RandomFlip(mode="horizontal")
 
-                x = rot(flip(dret()(inputs)))
+                x = rot(flip(concat_layer()(inputs)))
 
             return x
 
@@ -525,7 +525,7 @@ if __name__ == '__main__':
             if profile and e ==1: tf.profiler.experimental.start(logs)
             
             
-            if e%50 == 0 :
+            if e%10 == 0 :
                 
                 validation_embedding = None
                 validation_labels = None
@@ -547,8 +547,10 @@ if __name__ == '__main__':
 
                 acc = compute_KNN_accuracy(validation_embedding, validation_labels)
                 acc2 = compute_KNN_accuracy(validation_higher_dim, validation_labels)
+                acc_5nn = compute_KNN_accuracy(validation_embedding, validation_labels,k =  5)
+                acc_10nn = compute_KNN_accuracy(validation_embedding, validation_labels, k = 10)
 
-                write_to_csv(save_dir+"/stats/KNN_acc.csv",[acc,acc2],e)
+                write_to_csv(save_dir+"/stats/KNN_acc.csv",[acc,acc2,acc_5nn,acc_10nn],e)
 
                 if  _isChief():
 
