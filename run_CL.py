@@ -432,7 +432,7 @@ if __name__ == '__main__':
 
                 with tf.GradientTape() as g:
                     output = model(inputs, training= True)
-                    loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = output[tf.shape(output)[0] // 2:, :])
+                    loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = output[tf.shape(output)[0] // 2:, :], indices = None)
                     loss_value += tf.nn.scale_regularization_loss(tf.reduce_sum(model.losses))
                 gradients = g.gradient(loss_value, model.trainable_variables)
 
@@ -473,7 +473,7 @@ if __name__ == '__main__':
                 epochs =    100
                 local_batch_size = 200
                 batch_size = local_batch_size * num_devices
-                learning_rate = 0.1    #0.000001, #for triplet, 0.1 for scaled centroid on mnist
+                learning_rate = 0.0001    #0.000001, #for triplet, 0.1 for scaled centroid on mnist
                 save_interval =  100
 
             schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
