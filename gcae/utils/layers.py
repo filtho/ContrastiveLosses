@@ -887,15 +887,15 @@ class AttentionBlock(tf.keras.layers.Layer):
         # layers.append(tf.keras.layers.LeakyReLU())
         # print("--- conv1d  filters: {0} kernel_size: {1}".format(filters, kernel_size))
 
-        self.D1 = tf.keras.layers.Dense(units)
-        self.D2 = tf.keras.layers.Dense(units)
+        self.D1 = tf.keras.layers.Dense(units, activation ="relu")
+        self.D2 = tf.keras.layers.Dense(units, activation ="relu")
         # self.D3 = tf.keras.layers.Dense(units)
 
-        self.N1 = tf.keras.layers.BatchNormalization()
-        self.N2 = tf.keras.layers.BatchNormalization()
+
 
         self.N1 = tf.keras.layers.LayerNormalization()
         self.N2 = tf.keras.layers.LayerNormalization()
+        self.N3 = tf.keras.layers.LayerNormalization()
 
         # layers.append(LocallyConnected(filters, kernel_size, kernel_regularizer = kernel_regularizer))#, kernel_initializer= k_init))
         # layers.append(tf.keras.layers.BatchNormalization())
@@ -903,9 +903,9 @@ class AttentionBlock(tf.keras.layers.Layer):
 
         # print("--- conv1d  filters: {0} kernel_size: {1}".format(filters, kernel_size))
 
-        self.wq = tf.keras.layers.Dense(units, use_bias=False, kernel_regularizer=tf.keras.regularizers.L2(l2=1e-3))
-        self.wv = tf.keras.layers.Dense(units, use_bias=False, kernel_regularizer=tf.keras.regularizers.L2(l2=1e-3))
-        self.wk = tf.keras.layers.Dense(units, use_bias=False, kernel_regularizer=tf.keras.regularizers.L2(l2=1e-3))
+        self.wq = tf.keras.layers.Dense(units, use_bias=False, activation ="relu")
+        self.wv = tf.keras.layers.Dense(units, use_bias=False, activation ="relu")
+        self.wk = tf.keras.layers.Dense(units, use_bias=False, activation ="relu")
 
         self.layers = layers
 
@@ -931,6 +931,7 @@ class AttentionBlock(tf.keras.layers.Layer):
         x1 = self.D1(sum1)
 
         x2 = self.D2(x1)
+        x2 = self.N3(x2)
 
         # x3 = self.D3(tf.keras.layers.add([x2, sum1]))
         x3 = tf.keras.layers.add([x2, sum1])
@@ -1167,4 +1168,85 @@ class RN_down(tf.keras.layers.Layer):
         # print("--- performing addition ")
         x =self.act( tf.keras.layers.Add()([x, y]))
         return x
+
+
+class S1_B2(tf.keras.layers.Layer):
+
+    def __init__(self, name="res_block1"):
+        """ A short implementation for a residual block"""
+
+        super(S1_B2, self).__init__()
+        self.cname=name
+        layers = []
+
+        layers.append(tf.keras.layers.Conv1D(filters=32, kernel_size=1, strides=1, padding="same"))
+        layers.append(tf.keras.layers.BatchNormalization())
+        layers.append(tf.keras.layers.Activation("relu"))
+
+        layers.append(tf.keras.layers.Conv1D(filters=32, kernel_size=3, strides=1, padding="same"))
+        layers.append(tf.keras.layers.BatchNormalization())
+        layers.append(tf.keras.layers.Activation("relu"))
+
+        layers.append(tf.keras.layers.Conv1D(filters=32, kernel_size=1, strides=1, padding="same"))
+        layers.append(tf.keras.layers.BatchNormalization())
+        self.layers = layers
+        self.act = tf.keras.layers.Activation('relu')
+
+    def call(self, input_data):
+
+        x = self.layers[0](input_data)
+        for layer in self.layers[1:]:
+            # print("--- adding {0} ".format(type(layer)))
+            x = layer(x)
+
+        # print("--- performing addition ")
+        x = tf.keras.layers.Add()([input_data, x])
+        x = self.act(x)
+        
+        return x
+
+
+class S1_B1(tf.keras.layers.Layer):
+
+    def __init__(self, name="res_block1"):
+        """ A short implementation for a residual block"""
+
+        super(S1_B1, self).__init__()
+        self.cname=name
+        layers = []
+        layers.append(tf.keras.layers.Conv1D(filters=32, kernel_size=1, strides=1, padding="same"))
+        layers.append(tf.keras.layers.BatchNormalization())
+        layers.append(tf.keras.layers.Activation("relu"))
+
+        layers.append(tf.keras.layers.Conv1D(filters=32, kernel_size=3, strides=1, padding="same"))
+        layers.append(tf.keras.layers.BatchNormalization())
+        layers.append(tf.keras.layers.Activation("relu"))
+
+        layers.append(tf.keras.layers.Conv1D(filters=32, kernel_size=1, strides=1, padding="same"))
+        layers.append(tf.keras.layers.BatchNormalization())
+        self.layers = layers
+
+        self.C1 = tf.keras.layers.Conv1D(filters=32, kernel_size=1, strides=1, padding="same")
+        self.N1 = tf.keras.layers.BatchNormalization()
+        self.act = tf.keras.layers.Activation('relu')
+
+    def call(self, input_data):
+
+        x = self.layers[0](input_data)
+        for layer in self.layers[1:]:
+            # print("--- adding {0} ".format(type(layer)))
+            x = layer(x)
+
+        # print("--- performing addition ")
+
+        y = self.C1(input_data)
+        y = self.N1(y)
+
+
+        x = tf.keras.layers.Add()([y, x])
+        x = self.act(x)
+        
+        return x
+
+
 

@@ -33,7 +33,8 @@ from sklearn.naive_bayes import GaussianNB
 from pysnptools.snpreader import Bed
 import pyarrow as pa
 import pyarrow.parquet as pq
-
+from sklearn.neighbors import NearestNeighbors
+import scipy
 
 from utils.tfrecords_utils import write_genotypes_to_tfr_long, get_dataset_large, write_genotypes_to_tfr_long_one_sample, get_dataset_large_mult_dir, write_genotypes_to_tfr_long_one_sample_mult_dir
 
@@ -75,6 +76,11 @@ class data_generator_ae:
         self.n_valid_samples = None
         self.n_train_samples = None
 
+        if rand_split_state is not None:
+
+            self.rand_split_state = 1 
+        else: 
+            self.rand_split_state = rand_split_state
 
         self._define_samples()
 
@@ -204,7 +210,7 @@ class data_generator_ae:
         self.train_batch_location = 0
 
         self.sample_idx_train, self.sample_idx_valid = get_test_samples_stratified2(self.ind_pop_list_train_orig,
-                                                                                    validation_split)
+                                                                                    validation_split, self.rand_split_state)
 
         self.sample_idx_train = np.array(self.sample_idx_train)
         self.sample_idx_valid = np.array(self.sample_idx_valid)
@@ -476,6 +482,28 @@ def get_pops_with_k(k, coords_by_pop):
 def f1_score_kNN(x, labels, labels_to_use, k=5):
     if k > 0:
         classifier = KNeighborsClassifier(n_neighbors=k)
+        nbrs = NearestNeighbors(n_neighbors=k+1, algorithm='ball_tree').fit(x)
+        nbr = nbrs.kneighbors(x)[1][:,1:k+1]
+        nbr_labels = np.take(labels, nbr)
+        #print(nbr_labels.shape)
+        #predicted_labels = scipy.stats.mode(nbr_labels,axis = 1)[0][:,0]
+        #print(pred_label)
+        lst = []
+        for i in range(len(nbr_labels)):
+            sample = nbr_labels[i,:]
+            unique,indexes, counts = np.unique(sample, return_index=True, return_counts = True)
+            #unique_sorted = unique[indexes]
+            unique_sorted = [sample[index] for index in sorted(indexes)]
+
+            if counts[np.argmax(counts)] >1:
+                
+                lst.append(unique[np.argmax(counts)])
+            else:
+                
+                lst.append(unique_sorted[np.where(unique[indexes] != "nan")[0][0]])
+        predicted_labels =np.array(lst)
+      
+        #exit()
     elif k == 0:
         classifier = NearestCentroid()
     elif k == -1:
@@ -489,7 +517,9 @@ def f1_score_kNN(x, labels, labels_to_use, k=5):
     else:  # Never used
         classifier.fit(np.concatenate((x, x + (np.random.random_sample(x.shape) - 0.5) * 1e-4)),
                        np.concatenate((labels, labels)))
-    predicted_labels = classifier.predict(x)
+    #predicted_labels = classifier.predict(x)
+
+
     # this returns a vector of f1 scores per population
     f1_score_per_pop = f1_score(y_true=labels, y_pred=predicted_labels, labels=labels_to_use, average=None)
     f1_score_avg =     f1_score(y_true=labels, y_pred=predicted_labels, average="micro")
@@ -914,7 +944,7 @@ def genfromplink(fileprefix):
     return (genotypes, bed.shape[0])
 
 
-def get_test_samples_stratified2(ind_pop_list, test_split):
+def get_test_samples_stratified2(ind_pop_list, test_split, rand_split_state=1):
     '''
     Generate a set of samples stratified by population from eigenstratgeno data.
     FILIP EDIT: REMOVED THE GENOTYPE INPUT/OUTPUT- CANT FIND THE UISE OF IT. ONLY INDICES ARE OF INTEREST
@@ -975,7 +1005,8 @@ def get_test_samples_stratified2(ind_pop_list, test_split):
         sample_idx = range(len(pop_list))
         sample_idx_train, sample_idx_test, pops_train, pops_test = train_test_split(sample_idx, pop_list,
                                                                                     test_size=test_split,
-                                                                                    stratify=pop_list, random_state=1)
+                                                                                    stratify=pop_list , random_state=rand_split_state)
+        tf.print(f"creating dataset with random state {rand_split_state}")                                                                                   
         sample_idx_train = np.array(sample_idx_train)
         sample_idx_test = np.array(sample_idx_test)
 
@@ -1082,7 +1113,7 @@ class alt_data_generator(data_generator_ae):
                  batch_size, normalization_mode="genotypewise01", recombination_rate=0.0, generations=0,
                  normalization_options=None,# {"flip": False, "missing_val": -1.0, "num_markers": None},
                  impute_missing=True,
-                 sparsifies=False, only_recomb=False, contrastive= False, n_samples = -1, decode_only = False):
+                 sparsifies=False, only_recomb=False, contrastive= False, n_samples = -1, decode_only = False, rand_split_state=None):
 
         self.contrastive = contrastive
         self.decode_only = decode_only
@@ -1109,6 +1140,12 @@ class alt_data_generator(data_generator_ae):
         self.baseline_concordance_superpop_informed = None
         self.baseline_concordance = None
         #self.baseline_concordances_k_mer = None
+
+        if rand_split_state is not None:
+
+            self.rand_split_state = rand_split_state
+        else: 
+            self.rand_split_state = 1
 
         if decode_only:
             # need to define the encoded values from which we want to reconstruct orignal data.

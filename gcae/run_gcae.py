@@ -1,11 +1,11 @@
 """GenoCAE.
 
 Usage:
-  run_gcae.py train --datadir=<name> --data=<name> --model_id=<name> --train_opts_id=<name> --data_opts_id=<name> --save_interval=<num> --epochs=<num> [--resume_from=<num> --trainedmodeldir=<name> --recomb_rate=<num> --superpops=<name> --generations=<num>] [--pheno_model_id=<name>]
-  run_gcae.py project --datadir=<name>   [ --data=<name> --model_id=<name>  --train_opts_id=<name> --data_opts_id=<name> --superpops=<name> --epoch=<num> --trainedmodeldir=<name>   --pdata=<name> --trainedmodelname=<name> --alt_data=<name> --recomb_rate=<num> --generations=<num>]
+  run_gcae.py train --datadir=<name> --data=<name> --model_id=<name> --train_opts_id=<name> --data_opts_id=<name> --save_interval=<num> --epochs=<num> [--resume_from=<num> --trainedmodeldir=<name> --recomb_rate=<num> --superpops=<name> --generations=<num> --phenofile=<name> --pheno=<name> --rand_split_state=<num> ] [--pheno_model_id=<name>]
+  run_gcae.py project --datadir=<name>   [ --data=<name> --model_id=<name>  --train_opts_id=<name> --data_opts_id=<name> --superpops=<name> --epoch=<num> --trainedmodeldir=<name>   --pdata=<name> --trainedmodelname=<name> --alt_data=<name> --recomb_rate=<num> --generations=<num> --phenofile=<name> --pheno=<name> --rand_split_state=<num>]
   run_gcae.py plot --datadir=<name> [  --data=<name>  --model_id=<name> --train_opts_id=<name> --data_opts_id=<name>  --superpops=<name> --epoch=<num> --trainedmodeldir=<name>  --pdata=<name> --trainedmodelname=<name>]
   run_gcae.py animate --datadir=<name>   [ --data=<name>   --model_id=<name> --train_opts_id=<name> --data_opts_id=<name>  --superpops=<name> --epoch=<num> --trainedmodeldir=<name> --pdata=<name> --trainedmodelname=<name>]
-  run_gcae.py evaluate --datadir=<name> --metrics=<name>  [  --data=<name>  --model_id=<name> --train_opts_id=<name> --data_opts_id=<name>  --superpops=<name> --epoch=<num> --trainedmodeldir=<name>  --pdata=<name> --trainedmodelname=<name> --alt_data=<name> ]
+  run_gcae.py evaluate --datadir=<name> --metrics=<name>  [  --data=<name>  --model_id=<name> --train_opts_id=<name> --data_opts_id=<name>  --superpops=<name> --epoch=<num> --trainedmodeldir=<name>  --pdata=<name> --trainedmodelname=<name> --alt_data=<name> --rand_split_state=<num> ]
 
 Options:
   -h --help             show this screen
@@ -53,6 +53,7 @@ from datetime import datetime
 from utils.data_handler import  get_saved_epochs, get_projected_epochs, write_h5, read_h5, get_coords_by_pop, convex_hull_error, f1_score_kNN, plot_genotype_hist, to_genotypes_sigmoid_round, to_genotypes_invscale_round, GenotypeConcordance, get_pops_with_k, get_baseline_gc, write_metric_per_epoch_to_csv
 from utils.visualization import plot_coords_by_superpop, plot_clusters_by_superpop, plot_coords, plot_coords_by_pop, make_animation, write_f1_scores_to_csv,train_test_KDE_plot
 import json
+import scipy
 import numpy as np
 import pandas as pd
 import time
@@ -67,6 +68,13 @@ from utils.data_handler import alt_data_generator, parquet_converter
 from utils.set_tf_config_berzelius_1_proc_per_gpu import set_tf_config
 import shutil
 import ContrastiveLosses as CL
+import keras
+from sklearn.neighbors import NearestNeighbors
+import numpy as np
+from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA
+from sklearn import linear_model
+
 
 
 if "SLURM_JOBID" in os.environ:
@@ -115,6 +123,57 @@ def _isChief():
     else:
         return True
 
+def nearest_neighbour_pheno_tt(quant_train, quant_test, coord_train,coord_test,k_vec):
+    nind_train = np.where(~np.isnan(quant_train))[0]
+    nind_test = np.where(~np.isnan(quant_test))[0]
+
+    coord_train = coord_train[nind_train,:]
+    coord_test = coord_test[nind_test,:]
+    nbrs = NearestNeighbors(n_neighbors=np.max(k_vec) + 1, algorithm='ball_tree').fit(coord_train)
+    corr = []
+    pearr = []
+    quant_train = quant_train[nind_train]
+    quant_test = quant_test[nind_test]
+
+    #quant_train = (quant_train - np.mean(quant_train)) / np.std(quant_train)
+    #quant_test  = (quant_test - np.mean(quant_train)) / np.std(quant_train)
+    for k in k_vec:
+        nbr = nbrs.kneighbors(coord_test)[1][:, 1:k + 1]
+        nbr_labels = np.take(quant_train, nbr)
+        predicted = np.mean(nbr_labels, axis = 1)
+        corr.append(np.corrcoef(predicted, quant_test)[0, 1])
+        pearr.append(scipy.stats.pearsonr(quant_test, predicted)[0])
+
+    return corr, pearr
+
+def BayesianRidgepheno_tt(quant_train, quant_test, coord_train,coord_test):
+    nind_train = np.where(~np.isnan(quant_train))[0]
+    nind_test = np.where(~np.isnan(quant_test))[0]
+    coord_train = coord_train[nind_train,:]
+    coord_test = coord_test[nind_test,:]
+    quant_train = quant_train[nind_train]
+    quant_test = quant_test[nind_test]
+
+    clf = linear_model.BayesianRidge(tol  =1e-7)
+    clf.fit(coord_train, quant_train)
+    predicted = clf.predict(coord_test)
+    corr = clf.score(coord_test, quant_test)
+    pearr = scipy.stats.pearsonr(quant_test, predicted)[0]
+
+    mse = np.mean((quant_test- predicted) ** 2)
+
+    return corr, mse, pearr
+
+def append_to_file(path, data, epoch = None):
+
+    if _isChief():
+        if epoch is not None:
+            write = tf.concat([tf.reshape(epoch, [1, 1]), tf.reshape(data,[1,1])],axis = 1).numpy()[0]
+        else:
+            write = data
+        with open(path, 'a', newline='') as fd:
+            writer = csv.writer(fd)
+            writer.writerow([str(i) for i in write])
 
 GCAE_DIR = Path(__file__).resolve().parent
 class Autoencoder(Model):
@@ -258,7 +317,7 @@ class Autoencoder(Model):
         else:
             chief_print("No marker specific variable.")
 
-    def call(self, input_data, targets=None, is_training = True, verbose = False,  regloss=True, encode_only= False):
+    def call(self, input_data, targets=None, is_training = True, verbose = False,  regloss=True, encode_only= False, return_high_dim = False):
         '''
         The forward pass of the model. Given inputs, calculate the output of the model.
 
@@ -268,7 +327,7 @@ class Autoencoder(Model):
         :return: output of the model (last layer) and latent representation (encoding layer)
 
         '''
-
+        high_dim = None
         # if we're adding a marker specific variables as an additional channel
         if self.marker_spec_var:
             # Tiling it to handle the batch dimension
@@ -374,6 +433,9 @@ class Autoencoder(Model):
 
             if verbose:
                 chief_print("--- shape: {0}".format(x.shape))
+            
+            if layer_name == "high_dim":
+                high_dim = x
 
         if self.regularizer and regloss and encoded_data is not None:
 
@@ -391,8 +453,8 @@ class Autoencoder(Model):
 
             #reg_loss = self.regularizer["reg_factor"] * (box_factor* tf.reduce_sum(tf.math.maximum(tf.constant(0.), tf.square(encoded_data_pure) - 1 * box_area))) #  + 0.* dist_penalty+  0.* tf.reduce_sum(50 * ( -self.cell_lock*0.05 + tf.math.maximum(self.cell_lock*0.05,tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/period))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/period))))))) #  / tf.math.abs(tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))   )  ))
             #reg_loss = self.regularizer["reg_factor"] * tf.reduce_sum(tf.math.maximum(0., tf.square(encoded_data_pure) - 1 * 40000.))
-            reg_loss =  (box_factor* tf.reduce_sum(tf.math.maximum(tf.constant(0.), tf.square(encoded_data_pure) - 1 * box_area))) /box_area / tf.cast(tf.shape(encoded_data_pure)[0], tf.float32) #  + 0.* dist_penalty+  0.* tf.reduce_sum(50 * ( -self.cell_lock*0.05 + tf.math.maximum(self.cell_lock*0.05,tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/period))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/period))))))) #  / tf.math.abs(tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))   )  ))
-
+            reg_loss =  (box_factor* tf.reduce_sum(tf.math.maximum(tf.constant(0.), tf.square(encoded_data_pure) - 1 * box_area))) /box_area# / tf.cast(tf.shape(encoded_data_pure)[0], tf.float32) #  + 0.* dist_penalty+  0.* tf.reduce_sum(50 * ( -self.cell_lock*0.05 + tf.math.maximum(self.cell_lock*0.05,tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/period))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/period))))))) #  / tf.math.abs(tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))   )  ))
+            #tf.print(f"Reg_loss {reg_loss}")
             #tf.print(tf.reduce_sum( 1 + 1 * tf.math.maximum(0.0,tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))))) #  / tf.math.abs(tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))   )  ))
             #tf.print(tf.reduce_sum(tf.math.maximum(0., tf.square(encoded_data_pure) - 1 * 100)))
             #reg_loss = self.regularizer["reg_factor"] * (tf.reduce_sum(tf.math.maximum(0., tf.square(encoded_data_pure) - 1 * 100)) + 0.1 + 0.1 * tf.math.sin((encoded_data_pure[:,0]) * (2*math.pi/10)) * tf.math.sin((encoded_data_pure[:,1]) * (2*math.pi/10)) / tf.math.abs(5 * tf.math.sin((encoded_data_pure[:,0]) * (2*math.pi/10)) * tf.math.sin((encoded_data_pure[:,1]) * (2*math.pi/10))))
@@ -452,13 +514,17 @@ class Autoencoder(Model):
                 #self.add_loss(tf.math.reduce_sum(self.regularizer["rep_factor"] * (tf.math.reduce_mean(tf.where(targets == shifted_targets, 0.0, 1.0), axis=-1) * r2**-6.0 - r2**-3.0)))
                 # tf.norm(diff, ord = 2, axis = -1)
                 # * f.math.l2_normalize(diff, axis = -1)
-            tf.print(reploss)
+            #tf.print(reploss)
             self.add_loss(reploss)
 
         x = tf.keras.layers.Activation('linear', dtype='float32')(x) # This is to ascertain that the output has dtyoe float32. With mixed precision the computations are done in float16.
         encoded_data = tf.keras.layers.Activation('linear', dtype='float32')(encoded_data) # This is to ascertain that the output has dtyoe float32. With mixed precision the computations are done in float16.
 
-        return x, encoded_data
+        if return_high_dim:
+            return x, encoded_data, high_dim
+
+        else:
+            return x, encoded_data
 
 
     def handle_residual_layer(self, layer_name, inputs, verbose=False):
@@ -591,6 +657,18 @@ def generatepheno(data, poplist):
     if data is None:
         return None
     return tf.expand_dims(tf.convert_to_tensor([data.get((fam, name), None) for name, fam in poplist]), axis=-1)
+
+
+
+def generatepheno2(pheno_data,pheno_names, poplist):
+    if pheno_names is None:
+        return None
+    #tf.print(pheno_names)
+    #tf.print(poplist[:,0])
+    indsss = tf.where(poplist[:,0] == pheno_names[:,tf.newaxis])[:,0]
+    #tf.print(indsss)
+    #tf.print(pheno_data)
+    return tf.cast(tf.gather(pheno_data, indsss),tf.float16) # tf.expand_dims(tf.convert_to_tensor([data.get((fam, name), None) for name, fam in poplist]), axis=-1)
 
 def readpheno(file, num):
     with open(file, "rt") as f:
@@ -740,7 +818,6 @@ def main():
 
         train_directory = False
 
-
     if arguments["generations"] and arguments["recomb_rate"]:
         generations = int(arguments["generations"])
         recomb_rate = float(arguments["recomb_rate"])
@@ -759,8 +836,18 @@ def main():
     elif not arguments["recomb_rate"] and  arguments["generations"]:
         chief_print("Cant't recombine {} with no recombination rate")
 
+    if arguments["phenofile"]:
+        phenofile = arguments["phenofile"]
+        pheno = arguments["pheno"]
+    else:
+        phenofile = None
+    if arguments["rand_split_state"]:
+        rand_split_state = int(arguments["rand_split_state"])
+    else:
+        rand_split_state = 1
 
 
+    print(f"USING RANDOM SPLIT STATE: {rand_split_state}")
     with open("{}/data_opts/{}.json".format(GCAE_DIR, data_opts_id)) as data_opts_def_file:
         data_opts = json.load(data_opts_def_file)
 
@@ -872,6 +959,8 @@ def main():
         pass
 
     encoded_data_file = "{0}/{1}/{2}".format(train_directory, pdata, "encoded_data.h5")
+    high_dim_encoded_data_file = "{0}/{1}/{2}".format(train_directory, pdata, "high_dim_encoding.h5")
+
     #encoded_data_file = "{0}/{1}".format(results_directory, "encoded_data.h5")
 
     if "noise_std" in train_opts.keys():
@@ -943,7 +1032,8 @@ def main():
                         generations = generations,
                         recombination_rate= 0.0, #recomb_rate,
                         only_recomb= False,
-                        n_samples = n_train_samples_for_data)
+                        n_samples = n_train_samples_for_data,
+                        rand_split_state = rand_split_state)
         chief_print("Recombination rate: " + str(data.recombination_rate))
 
         n_markers = data.n_markers
@@ -978,6 +1068,17 @@ def main():
             phenodata = readpheno(data_prefix + ".phe", 2)
         else:
             phenodata = None
+
+        if phenofile:
+            phenos = pd.read_csv(phenofile)
+            print(phenos.keys())
+            pheno_data = tf.convert_to_tensor(phenos[pheno].to_numpy())
+            pheno_names = tf.convert_to_tensor(phenos["line_name"])
+
+        else:
+            pheno_data = None
+            phenos = None
+            pheno_names = None
 
         chunk_size = 5*data.batch_size
         ds = data.create_dataset_tf_record(chunk_size, "training", num_workers)
@@ -1123,9 +1224,9 @@ def main():
 
 
             @tf.function
-            def distributed_train_step(model, model2, optimizer, optimizer2, loss_function, input_data, targets, pure, phenomodel=None, phenotargets=None,data=None):
+            def distributed_train_step(model, model2, optimizer, optimizer2, loss_function, input_data, targets, pure, phenomodel=None, phenotargets=None,data=None,alt_pos_coords = None, indices = None):
 
-                per_replica_losses, local_num_total_k_mer, local_num_correct_k_mer, local_class_conc  = strategy.run(run_optimization, args=(model, model2, optimizer, optimizer2, loss_function, input_data, targets, pure, phenomodel, phenotargets,data))
+                per_replica_losses, local_num_total_k_mer, local_num_correct_k_mer, local_class_conc  = strategy.run(run_optimization, args=(model, model2, optimizer, optimizer2, loss_function, input_data, targets, pure, phenomodel, phenotargets,data, alt_pos_coords, indices))
                 loss = strategy.reduce("SUM", per_replica_losses, axis=None)
                 num_total_k_mer = strategy.reduce("SUM", local_num_total_k_mer, axis=None)
                 num_correct_k_mer = strategy.reduce("SUM", local_num_correct_k_mer, axis=None)
@@ -1136,12 +1237,12 @@ def main():
 
 
             @tf.function
-            def valid_batch(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data):
+            def valid_batch(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data, indices = None):
 
                 output_valid_batch, _ = autoencoder(input_valid_batch, is_training = True, regloss=False)
                 if contrastive:
 
-                    valid_loss_batch = loss_func(anchors = output_valid_batch[:tf.shape(output_valid_batch)[0] // 2, :], positives = output_valid_batch[tf.shape(output_valid_batch)[0] // 2:, :])
+                    valid_loss_batch = loss_func(anchors = output_valid_batch[:tf.shape(output_valid_batch)[0] // 2, :], positives = output_valid_batch[tf.shape(output_valid_batch)[0] // 2:, :], indices = indices)
 
                     #valid_loss_batch = loss_func(y_pred=output_valid_batch, y_true=targets_valid_batch)
                     num_total_k_mer, num_correct_k_mer = tf.convert_to_tensor([[0.0, 0.0, 0.0, 0.0, 0.0]]), tf.convert_to_tensor([[0.0, 0.0, 0.0, 0.0, 0.0]])
@@ -1155,7 +1256,7 @@ def main():
 
             @tf.function
             def proj_batch(model, loss_func, input_valid_batch, targets_valid_batch,data,poplist,poplist_batch):
-                output, encoded_data = model(input_valid_batch, is_training=False, regloss=False)
+                output, encoded_data, high_dim = model(input_valid_batch, is_training=False, regloss=False, return_high_dim = True)
 
                 if contrastive:
                     valid_loss_batch = 0# Does not really make sense to compute this, since it depends on the augmentations.
@@ -1174,12 +1275,12 @@ def main():
                     pop_inds = tf.cast(tf.reshape(tf.convert_to_tensor([]), [0]), tf.float32)
 
 
-                return valid_loss_batch, num_total_k_mer, num_correct_k_mer,class_conc,output,encoded_data,pop_inds, targets_valid_batch
+                return valid_loss_batch, num_total_k_mer, num_correct_k_mer,class_conc,output,encoded_data,pop_inds, targets_valid_batch, high_dim
 
             @tf.function
-            def distributed_valid_batch(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data):
+            def distributed_valid_batch(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data,indices ):
 
-                per_replica_losses, local_num_total_k_mer, local_num_correct_k_mer,local_class_conc   = strategy.run(valid_batch, args=(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data))
+                per_replica_losses, local_num_total_k_mer, local_num_correct_k_mer,local_class_conc   = strategy.run(valid_batch, args=(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data,indices))
 
                 loss = strategy.reduce("SUM", per_replica_losses, axis=None)
                 num_total_k_mer = strategy.reduce("SUM", local_num_total_k_mer, axis=None)
@@ -1191,7 +1292,7 @@ def main():
             @tf.function
             def distributed_proj_batch(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data,poplist,poplist_batch):
 
-                per_replica_losses, local_num_total_k_mer, local_num_correct_k_mer,local_class_conc, decoded_data_valid_batch, encoded_data_valid_batch,pop_inds_batch, targets_valid_batch = strategy.run(proj_batch, args=(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data,poplist,poplist_batch))
+                per_replica_losses, local_num_total_k_mer, local_num_correct_k_mer,local_class_conc, decoded_data_valid_batch, encoded_data_valid_batch,pop_inds_batch, targets_valid_batch, high_dim = strategy.run(proj_batch, args=(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data,poplist,poplist_batch))
                 loss = strategy.reduce("SUM", per_replica_losses, axis=None)
                 num_total_k_mer = strategy.reduce("SUM", local_num_total_k_mer, axis=None)
                 num_correct_k_mer = strategy.reduce("SUM", local_num_correct_k_mer, axis=None)
@@ -1202,7 +1303,7 @@ def main():
                 targets = strategy.gather(targets_valid_batch, axis=0)
 
 
-                return loss, num_total_k_mer, num_correct_k_mer, class_conc,decoded_data, encoded_data,pop_inds,targets
+                return loss, num_total_k_mer, num_correct_k_mer, class_conc,decoded_data, encoded_data,pop_inds,targets, high_dim
 
             @tf.function
             def compute_concordance(inputs, truth, prediction, data):
@@ -1235,7 +1336,6 @@ def main():
 
 
                 use_indices = tf.where(inputs[:,:, 1] !=  2  )
-                tf.print(inputs)
                 diff = true_genotypes - genotypes_output
                 diff2 = tf.gather_nd(diff, indices=use_indices)
                 num_total = tf.cast(tf.shape(diff2)[0], tf.float32)
@@ -1604,7 +1704,7 @@ def main():
 
                 return loss_value, num_total_k_mer, num_correct_k_mer, class_conc
             @tf.function
-            def run_optimization(model, model2, optimizer, optimizer2, loss_function, input, targets, pure, phenomodel=None, phenotargets=None,data = None):
+            def run_optimization(model, model2, optimizer, optimizer2, loss_function, input, targets, pure, phenomodel=None, phenotargets=None,data = None,alt_pos_coords = None, indices = None):
                 '''
                 Run one step of optimization process based on the given data, basic version.
                     
@@ -1616,16 +1716,47 @@ def main():
                 :param targets: target data
                 :return: value of the loss function
                 '''
+                
+        
+
 
                 with tf.GradientTape() as g:
                     output, _ = model(input, is_training=True)
                     if contrastive:
-                        loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = output[tf.shape(output)[0] // 2:, :])
+                        if alt_pos_coords ==None:
+
+                
+                            loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = output[tf.shape(output)[0] // 2:, :], indices = indices)
+                        else:
+                            u = tf.random.uniform((1,))
+
+                            nine_vec = tf.where(alt_pos_coords == -9)
+
+                            updates = tf.cast(tf.gather(tf.range(tf.shape(alt_pos_coords)[0]), nine_vec),tf.int64)
+                            alt_pos_coords = tf.tensor_scatter_nd_update(alt_pos_coords[:,tf.newaxis], indices=nine_vec, updates=updates)
+                            alt_pos_coords = tf.squeeze(alt_pos_coords)
+
+                            a = output[:tf.shape(output)[0] // 2, :]
+                            p = output[tf.shape(output)[0] // 2:, :]
+                            d = tf.reduce_sum((a-p)**2,axis = 1)
+                            p2 = tf.gather(output[tf.shape(output)[0] // 2:, :],alt_pos_coords)
+                            d2 = tf.reduce_sum((a-p2)**2,axis = 1)
+
+                            cond_inds = tf.where(~tf.math.logical_or(d2 <1.5*d,d2 < 10))
+                            updates = tf.cast(tf.gather_nd(tf.range(tf.shape(alt_pos_coords)[0]),cond_inds),tf.int64)
+                            alt_pos_coords = tf.tensor_scatter_nd_update(alt_pos_coords, indices=cond_inds, updates=updates)
+
+                            if u<1.0:
+                                loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = tf.gather(output[tf.shape(output)[0] // 2:, :],alt_pos_coords), indices = indices)
+                            else:
+                                loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = output[tf.shape(output)[0] // 2:, :], indices = indices)
+
+
+
                     else:
                         loss_value = loss_function(y_pred = output, y_true = targets)
 
 
-                    #loss_value = loss_function(y_pred = output, y_true = targets)
                     loss_value += tf.nn.scale_regularization_loss (tf.reduce_sum(model.losses))
 
                 gradients = g.gradient(loss_value, model.trainable_variables)
@@ -1673,7 +1804,9 @@ def main():
                         only_recomb=True,
                         contrastive = contrastive,
                         decode_only = decode_only,
-                        n_samples = n_train_samples_for_data )
+                        n_samples = n_train_samples_for_data ,
+                        rand_split_state = rand_split_state
+                        )
 
         chief_print("Recombination rate: " + str(data.recombination_rate))
 
@@ -1711,8 +1844,6 @@ def main():
                 data.create_temp_fam_and_superpop(data_prefix, superpopulations_file, n_train_batches)
                 superpopulations_file = superpopulations_file+"_temp"
 
-            #superpops = pd.read_csv(superpopulations_file, header=None).to_numpy()
-
 
         train_times = []
         train_epochs = []
@@ -1735,6 +1866,7 @@ def main():
 
                     schedule_args["first_decay_steps"] = schedule_args["first_decay_steps"] * (1- schedule_args["t_mul"]**(1 +n_restarts)) / (1- schedule_args["t_mul"]) - schedule_args["first_decay_steps"] * (1- schedule_args["t_mul"]**(n_restarts)) / (1- schedule_args["t_mul"])
 
+                    schedule_args["first_decay_steps"]  =schedule_args["first_decay_steps"] * n_train_batches* n_train_batches
 
 
             lr_schedule = schedule_module(learning_rate, **schedule_args)
@@ -1806,6 +1938,8 @@ def main():
 
             if contrastive:
                 optimizer = tf.optimizers.SGD(learning_rate = lr_schedule, momentum=0.9,nesterov = True) # , beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
+                #optimizer = tf.optimizers.Nadam(learning_rate = lr_schedule, beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
+
             else:
 
                 optimizer = tf.optimizers.Adam(learning_rate = lr_schedule, beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
@@ -1828,17 +1962,10 @@ def main():
                 input_test, _, _, _ ,_ = next(ds.as_numpy_iterator())
                 _, _ = autoencoder(input_test[:,:,:], is_training = False, verbose = True)
 
-        ######### Create objects for tensorboard summary ###############################
-        #if isChief:
-        #    train_writer = tf.summary.create_file_writer(train_directory + '/train')
-        #    valid_writer = tf.summary.create_file_writer(train_directory + '/valid')
-        ######################################################
-
         if _isChief():
-            tf.print(autoencoder.summary())
+            tf.print(autoencoder.summary( expand_nested=True))
 
             memory_info = tf.config.experimental.get_memory_info('GPU:0')
-
             #tf.print(memory_info["current"])
             #tf.print(memory_info["peak"])
 
@@ -1879,8 +2006,7 @@ def main():
             suffix = str(os.environ["SLURM_PROCID"])
         else:
             suffix = ""
-        #if slurm_job:
-        #	suffix = str(os.environ["SLURMD_NODENAME"])
+       
         logs = train_directory+ "/logdir/"  + datetime.now().strftime("%Y%m%d-%H%M%S") +"_"+ suffix
         samples_seen = 0
 
@@ -1932,12 +2058,39 @@ def main():
 
 
             for batch_dist_input, batch_dist_target, poplist, original_genotypes, original_inds in dds:
-                pt = generatepheno(phenodata, poplist)
+                #tf.print(batch_dist_input)
+                pt = generatepheno2(pheno_data, pheno_names, poplist)
+         
+                if phenofile:
+                    
+                    #TODO: fix this
+                    # For each nan value, just assign randomly another samples' phenotype
+                    nvec = tf.math.is_nan(pt)
+                    iddd = tf.random.uniform(dtype = tf.int32, shape =tf.shape(pt[nvec]), minval = 0, maxval =tf.shape(pt[nvec])[0])
+                    updates = tf.gather(pt[~nvec], iddd)
+                    pt = tf.tensor_scatter_nd_update(pt, indices = tf.where(nvec),updates=updates)
 
-                train_batch_loss, num_total_k_mer,num_correct_k_mer, class_conc_temp= distributed_train_step(autoencoder, autoencoder2, optimizer, optimizer2, loss_func, batch_dist_input, batch_dist_target, False, phenomodel=pheno_model, phenotargets=pt,data=data)
+                    nbrs = NearestNeighbors(n_neighbors=5, algorithm='ball_tree').fit(pt[:,tf.newaxis])
+                    chosen_neighbour = tf.random.uniform([1],minval=1,maxval=6, dtype= tf.int32)[0]
+                    alt_pos_coords = nbrs.kneighbors(pt[:,tf.newaxis])[1][:,1]
+                    
+                    updates2 = tf.cast(tf.ones(tf.shape(iddd))* -9, tf.int64)
+                    alt_pos_coords = tf.tensor_scatter_nd_update(alt_pos_coords, indices = tf.where(nvec),updates=updates2)
+                   
+                else:
+                    alt_pos_coords = None
+
+                indd =   tf.where(original_inds[:,0,tf.newaxis] == tf.convert_to_tensor(data.ind_pop_list_train_orig[:,0]))[:,1]
+
+
+                train_batch_loss, num_total_k_mer,num_correct_k_mer, class_conc_temp= distributed_train_step(autoencoder, autoencoder2, optimizer, optimizer2, loss_func, batch_dist_input, batch_dist_target, False, phenomodel=pheno_model, phenotargets=pt,data=data, alt_pos_coords = alt_pos_coords, indices = indd)
                 conc_train_total_k_mer += num_total_k_mer
                 conc_train_correct_k_mer += num_correct_k_mer
 
+
+                #tf.print(original_inds)
+                         
+                        
                 if need_encoded_things:
                     raw_encoded_data = autoencoder(original_genotypes, encode_only=True,is_training= False)
                     if raw_encoding == None:
@@ -1954,7 +2107,6 @@ def main():
                     assert(np.sum(np.where(sample_superpop == "holdout_val_pop")[0]) == 0 )
                 """
 
-                #print(tf.shape(strategy.experimental_local_results(poplist)))
                 train_loss += train_batch_loss
                 class_conc += class_conc_temp
             if data.only_recomb:
@@ -2025,8 +2177,9 @@ def main():
                 conc_valid_total_k_mer = 0
                 conc_valid_correct_k_mer = 0
                 for input_valid_batch, targets_valid_batch, poplist,original_genotypes,original_inds  in dds_validation:
+                    indd =   tf.where(original_inds[:,0,tf.newaxis] == tf.convert_to_tensor(data.ind_pop_list_train_orig[:,0]))[:,1]
 
-                    valid_loss_batch, num_total_k_mer, num_correct_k_mer,class_conc_temp_valid = distributed_valid_batch(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data)
+                    valid_loss_batch, num_total_k_mer, num_correct_k_mer,class_conc_temp_valid = distributed_valid_batch(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data, indd)
 
                     valid_loss += valid_loss_batch
 
@@ -2279,12 +2432,14 @@ def main():
                 generations = generations,
                 only_recomb=False,
                 contrastive = False ,# contrastive,
-                n_samples = n_train_samples)
+                n_samples = n_train_samples,
+                        rand_split_state = rand_split_state)
         data.sparsifies = [sparsify_fraction]
         data._define_samples() # This sets the number of validation samples to be 0
         ind_pop_list_train_reference = data.ind_pop_list_train_orig[data.sample_idx_train]
 
         write_h5(encoded_data_file, "ind_pop_list_train", np.array(ind_pop_list_train_reference, dtype='S'))
+        #write_h5(high_dim_encoded_data_file, "ind_pop_list_train", np.array(ind_pop_list_train_reference, dtype='S'))
 
         n_train_samples = copy.deepcopy(data.n_train_samples)
 
@@ -2321,7 +2476,8 @@ def main():
                         normalization_options = norm_opts,
                         impute_missing = fill_missing,
                         sparsifies  = sparsifies,
-                        only_recomb = True)
+                        only_recomb = True,
+                        rand_split_state = rand_split_state)
         if recomb_rate != 0:
             if recomb_rate !=1:
 
@@ -2475,9 +2631,13 @@ def main():
             encoded_train_recombined = np.empty((0, n_latent_dim))
 
             encoded_train_to_write = np.empty((0, n_latent_dim))
+            high_dim_encoding_to_write = np.empty((0, 75))
 
             decoded_train = None
             targets_train = np.empty((0, n_markers))
+
+            high_dim_encoding = np.empty((0, 75))
+
 
             loss_value_per_train_batch = []
             loss_train_batch = 0
@@ -2492,7 +2652,7 @@ def main():
                     targets_train_batch = tf.concat([original_genotypes[:,:,0], targets_train_batch], axis = 0)
                     ind_pop_list_train_batch = tf.concat([original_inds,ind_pop_list_train_batch ], axis = 0)
 
-                loss_train_batch, num_total_k_mer, num_correct_k_mer,class_conc_temp_valid, decoded_train_batch,encoded_train_batch, pop_inds_batch,targets_train_batch= distributed_proj_batch(autoencoder, loss_func, input_train_batch, targets_train_batch,data,poplist2,ind_pop_list_train_batch)
+                loss_train_batch, num_total_k_mer, num_correct_k_mer,class_conc_temp_valid, decoded_train_batch,encoded_train_batch, pop_inds_batch,targets_train_batch, high_dim= distributed_proj_batch(autoencoder, loss_func, input_train_batch, targets_train_batch,data,poplist2,ind_pop_list_train_batch)
 
 
                 # Here pop_inds are linking coords with the index in the fam file, excluding the recombined samples
@@ -2501,13 +2661,18 @@ def main():
                 if data.recombination_rate != 0:
                     encoded_train = np.concatenate((encoded_train, encoded_train_batch[0:tf.cast(tf.shape(encoded_train_batch)[0]/2,tf.int32),:]), axis=0)
                     encoded_train_recombined = np.concatenate((encoded_train_recombined, encoded_train_batch[tf.cast(tf.shape(encoded_train_batch)[0]/2,tf.int32):,:]), axis=0)
+                    
+                    high_dim_encoding = np.concatenate((high_dim_encoding, high_dim[0:tf.cast(tf.shape(high_dim)[0]/2,tf.int32),:]), axis=0)
+
                 else:
                     encoded_train = np.concatenate((encoded_train, encoded_train_batch[0:tf.cast(tf.shape(encoded_train_batch)[0],tf.int32),:]), axis=0)
                     encoded_train_recombined = np.concatenate((encoded_train_recombined, encoded_train_batch[tf.cast(tf.shape(encoded_train_batch)[0],tf.int32):,:]), axis=0)
+                    high_dim_encoding = np.concatenate((high_dim_encoding, high_dim[0:tf.cast(tf.shape(high_dim)[0],tf.int32),:]), axis=0)
 
                 # Since we want to plot the recombined samples, we save the original ones separately for writing to the encoded  h5 file used in evaluate.
                 # This may have to be done differently in the distributed setting
                 encoded_train_to_write = np.concatenate((encoded_train_to_write, encoded_train_batch[:-data.total_batch_size + data.batch_size,:]), axis=0)
+                high_dim_encoding_to_write = np.concatenate((high_dim_encoding_to_write, high_dim[:-data.total_batch_size + data.batch_size,:]), axis=0)
 
                 if decoded_train is None:
                     decoded_train = np.copy(decoded_train_batch[:,0:n_markers])
@@ -2534,6 +2699,9 @@ def main():
             ind_pop_list_train = poplist2[np.squeeze(pop_inds),:]
             encoded_train = np.array(encoded_train)
             encoded_train_to_write = np.array(encoded_train_to_write)
+            
+            high_dim_encoding = np.array(high_dim_encoding)
+            high_dim_encoding_to_write = np.array(high_dim_encoding_to_write)
 
 
             if not contrastive and False:
@@ -2547,7 +2715,6 @@ def main():
 
             output_names = ind_pop_list_train[:,1]
             ind_pop_list_train2 = ind_pop_list_train[:,[1,0]]
-
 
             encoded_train_get_coords = tf.concat([encoded_train,encoded_train_recombined], axis = 0)
             ind_pop_list_train2 = tf.concat([ind_pop_list_train2,tf.tile(tf.convert_to_tensor(["zArtificial","Artificial_1x"])[tf.newaxis, :], [tf.shape(encoded_train_recombined)[0], 1])],axis = 0).numpy()
@@ -2563,7 +2730,6 @@ def main():
                     list_t.append(x[0])
 
             try:
-
                 for i in ids[data_project.sample_idx_valid]:
                     x = np.where(output_names == i)[0]
                     if len(x) >0:
@@ -2576,6 +2742,9 @@ def main():
                     list_all.append(x[0])
 
             encoded_train_to_write = encoded_train[np.array(list_all)]
+            
+            high_dim_encoding_to_write = high_dim_encoding[np.array(list_all)]
+
 
             if isChief:
 
@@ -2657,14 +2826,17 @@ def main():
 
                 if pheno_train is not None:
                     writephenos(f'{results_directory}/{epoch}.phe', ind_pop_list_train, pheno_train)
+                
                 write_h5(encoded_data_file, "{0}_encoded_train".format(epoch), encoded_train_to_write)
+                
+                #write_h5(high_dim_encoded_data_file, "{0}_high_dim_encoding".format(epoch), high_dim_encoding_to_write)
 
 
                 markersize = 5
                 encoded_train2 = np.array(encoded_train)
 
-                plt_kde=False
-                if plt_kde:
+                plt_kde=True
+                if plt_kde and epoch ==epochs[-1]:
 
                     train_test_KDE_plot(outfile_prefix="{0}/dimred_by_train_test_KDEtest_e_{1}".format(results_directory, epoch_for_filename),
                                         x_train=encoded_train2[np.array(list_t), 0],
@@ -2672,8 +2844,98 @@ def main():
                                         x_valid=encoded_train2[np.array(list_v), 0],
                                         y_valid=encoded_train2[np.array(list_v), 1],
                                         markersize=markersize)
+                if phenofile is not None:
+                    # Put in evaluation here
+                    data_project.sample_idx_train
+                    # Fixa här.
+
+                    encoded_train2 = np.array(encoded_train)[list_all,:]
+
+                    coord_train = encoded_train2[data_project.sample_idx_train, :]
+                    quant_train = pheno_data.numpy()[data_project.sample_idx_train]
+                    k_vec_pheno = [5]
+                    corr_train,knn_pearr_train= nearest_neighbour_pheno_tt(quant_train, quant_train, coord_train,coord_train,k_vec_pheno)
+                    append_to_file(path = train_directory + "/stats/pheno_knn_train.csv", data = tf.convert_to_tensor(tf.cast(knn_pearr_train,tf.float32)), epoch = tf.convert_to_tensor(tf.cast(epoch,tf.float32)))
+                    
+                    rr_corr_train, rr_mse_train,pearr_train = BayesianRidgepheno_tt(quant_train, quant_train, coord_train,coord_train)
+                    append_to_file(path = train_directory + "/stats/rr_corr_train.csv", data = tf.convert_to_tensor(tf.cast(rr_corr_train,tf.float32)), epoch = tf.convert_to_tensor(tf.cast(epoch,tf.float32)))
+                    append_to_file(path = train_directory + "/stats/rr_mse_train.csv", data = tf.convert_to_tensor(tf.cast(rr_mse_train,tf.float32)), epoch = tf.convert_to_tensor(tf.cast(epoch,tf.float32)))
+                    append_to_file(path = train_directory + "/stats/rr_pearr_train.csv", data = tf.convert_to_tensor(tf.cast(pearr_train,tf.float32)), epoch = tf.convert_to_tensor(tf.cast(epoch,tf.float32)))
+
+                    
+                    
+                    if n_valid_samples > 0:
+                        coord_test = encoded_train2[data_project.sample_idx_valid, :]
+                        quant_test = pheno_data.numpy()[data_project.sample_idx_valid]
+                        corr_test,knn_pearr_test= nearest_neighbour_pheno_tt(quant_train, quant_test, coord_train,coord_test,k_vec_pheno)
+                        append_to_file(path = train_directory + "/stats/pheno_knn_test.csv", data = tf.convert_to_tensor(tf.cast(knn_pearr_test,tf.float32)), epoch = tf.convert_to_tensor(tf.cast(epoch,tf.float32)))
+
+                        rr_corr_valid, rr_mse_valid,pearr_valid = BayesianRidgepheno_tt(quant_train, quant_test, coord_train,coord_test)
+                        append_to_file(path = train_directory + "/stats/rr_corr_valid.csv", data = tf.convert_to_tensor(tf.cast(rr_corr_valid,tf.float32)), epoch = tf.convert_to_tensor(tf.cast(epoch,tf.float32)))
+                        append_to_file(path = train_directory + "/stats/rr_mse_valid.csv", data = tf.convert_to_tensor(tf.cast(rr_mse_valid,tf.float32)), epoch = tf.convert_to_tensor(tf.cast(epoch,tf.float32)))
+                        append_to_file(path = train_directory + "/stats/rr_pearr_valid.csv", data = tf.convert_to_tensor(tf.cast(pearr_valid,tf.float32)), epoch = tf.convert_to_tensor(tf.cast(epoch,tf.float32)))
+
+
+
+
+            if _isChief() and not os.path.isfile(train_directory + "/stats/train_index.csv"):
+                with open(train_directory + "/stats/train_index.csv", 'a', newline='') as fd:
+                    writer = csv.writer(fd)
+                    writer.writerow([str(i) for i in data_project.sample_idx_train])
+                with open(train_directory + "/stats/valid_index.csv", 'a', newline='') as fd:
+                    writer = csv.writer(fd)
+                    writer.writerow([str(i) for i in data_project.sample_idx_valid])
 
             chief_print("Projection time for {} gpus: {} seconds".format(num_devices, time.perf_counter()- t1))
+        if isChief:
+             if phenofile is not None:
+                # Put in evaluation here
+                data_project.sample_idx_train
+                # Fixa här.
+                coord_train = encoded_train2[np.array(list_t), :]
+                quant_train = pheno_data.numpy()[data_project.sample_idx_train]
+                gdat = pd.read_parquet(data_prefix+".parquet").to_numpy()
+
+                X_embedded = TSNE(n_components=5,method ="exact", learning_rate='auto', init='random', perplexity=3).fit_transform(gdat.T)
+                X_embedded2 = TSNE(n_components=2,method ="exact", learning_rate='auto', init='random', perplexity=3).fit_transform(gdat.T)
+
+                pca = PCA(n_components=2)
+                pca.fit(gdat.T)
+                X_PCA = pca.transform(gdat.T)
+                
+
+                pheno_knn_train = pd.read_csv(train_directory + "/stats/pheno_knn_train.csv", header = None, delimiter = ",").to_numpy()
+                pheno_knn_test =  pd.read_csv(train_directory + "/stats/pheno_knn_test.csv", header = None, delimiter = ",").to_numpy()
+                plt.plot(pheno_knn_train[:,0], pheno_knn_train[:,1],label = "train")
+                plt.plot(pheno_knn_test[:,0], pheno_knn_test[:,1],label = "test")
+                plt.xlabel("Epochs")
+                plt.legend()
+                plt.ylabel("KNN pheno prediction r^2")                                                 #nearest_neighbour_pheno_tt(quant_train, quant_test, coord_train,coord_test,k_vec_pheno)
+                plt.hlines(xmin= np.min(pheno_knn_train[:,0]), xmax= np.max(pheno_knn_train[:,0]), y = nearest_neighbour_pheno_tt(quant_train, quant_test,  X_embedded2[data_project.sample_idx_train,:], X_embedded2[data_project.sample_idx_valid,:],k_vec_pheno)[1],color = 'g', label= "X_embedded2", linewidth= 2)
+                plt.hlines(xmin= np.min(pheno_knn_train[:,0]), xmax= np.max(pheno_knn_train[:,0]), y = nearest_neighbour_pheno_tt(quant_train, quant_test,  X_embedded[data_project.sample_idx_train,:], X_embedded[data_project.sample_idx_valid,:],k_vec_pheno)[1],color = 'y', label= "X_embedded5", linewidth= 2)
+                plt.hlines(xmin= np.min(pheno_knn_train[:,0]), xmax= np.max(pheno_knn_train[:,0]), y = nearest_neighbour_pheno_tt(quant_train, quant_test,  X_PCA[data_project.sample_idx_train,:], X_PCA[data_project.sample_idx_valid,:],k_vec_pheno)[1], color = "k", label = "pca", linewidth= 2)
+                plt.hlines(xmin= np.min(pheno_knn_train[:,0]), xmax= np.max(pheno_knn_train[:,0]), y = nearest_neighbour_pheno_tt(quant_train, quant_test,  gdat.T[data_project.sample_idx_train,:], gdat.T[data_project.sample_idx_valid,:],k_vec_pheno)[1],color = 'r', label = "full")
+                plt.legend()
+                plt.savefig(train_directory + "/stats/pheno_knn.pdf")
+                plt.close()
+                
+                rr_pearr_train = pd.read_csv(train_directory + "/stats/rr_pearr_train.csv", header = None, delimiter = ",").to_numpy()
+                rr_pearr_valid =  pd.read_csv(train_directory + "/stats/rr_pearr_valid.csv", header = None, delimiter = ",").to_numpy()
+                plt.plot(rr_pearr_train[:,0], rr_pearr_train[:,1],label = "train")
+                plt.plot(rr_pearr_valid[:,0], rr_pearr_valid[:,1],label = "test")
+                plt.xlabel("Epochs")
+                plt.ylabel("Prediction Pearson r")
+                plt.title("bayesian ridge regression")
+
+                plt.hlines(xmin= np.min(pheno_knn_train[:,0]), xmax= np.max(pheno_knn_train[:,0]), y = BayesianRidgepheno_tt(quant_train, quant_test,  X_embedded2[data_project.sample_idx_train,:], X_embedded2[data_project.sample_idx_valid,:])[2],color = 'g', label= "X_embedded2", linewidth= 2)
+                plt.hlines(xmin= np.min(pheno_knn_train[:,0]), xmax= np.max(pheno_knn_train[:,0]), y = BayesianRidgepheno_tt(quant_train, quant_test,  X_embedded[data_project.sample_idx_train,:], X_embedded[data_project.sample_idx_valid,:])[2],color = 'y', label= "X_embedded5", linewidth= 2)
+                plt.hlines(xmin= np.min(pheno_knn_train[:,0]), xmax= np.max(pheno_knn_train[:,0]), y = BayesianRidgepheno_tt(quant_train, quant_test,  X_PCA[data_project.sample_idx_train,:], X_PCA[data_project.sample_idx_valid,:])[2], color = "k", label = "pca", linewidth= 2)
+                plt.hlines(xmin= np.min(pheno_knn_train[:,0]), xmax= np.max(pheno_knn_train[:,0]), y = BayesianRidgepheno_tt(quant_train, quant_test,  gdat.T[data_project.sample_idx_train,:], gdat.T[data_project.sample_idx_valid,:])[2],color = 'r', label = "full")
+                plt.legend()
+                plt.savefig(train_directory + "/stats/bayesRR_pearr.pdf")
+
+                plt.close()
+
 
 
         if isChief and not contrastive:
