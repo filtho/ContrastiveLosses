@@ -3,3 +3,12 @@ Examples/
 Results/
 saved_model/
 *.out
+.pylintrc
+.vscode/
+__pycache__/*
+gcae/Data/potato/
+gcae/example_tiny/
+gcae/.idea/*
+gcae/__pycache__/*
+gcae/utils/__pycache__/*
+tests/__pycache__/*
