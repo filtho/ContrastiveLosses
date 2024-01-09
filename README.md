@@ -1,10 +1,11 @@
 # <ins>__PAG 31__</ins>
+## To see other related visualizations, check out [this website.](https://filtho.github.io)
 
 This repo contains the code that has produced the embeddings using contrastive learning, as shown at PAG31, [poster number 676](https://filtho.github.io/poster.pdf).
 The poster presented at PAG 31 contained some smaller errors. Most notably in Figure 3 shows PCA with 10 dimensions, instead of 2.
 ![errata image figure 3](example_figures/test_errata.png)
 
-To see other related visualizations, check out [this website.](https://filtho.github.io)
+
 
 
 # ContrastiveLosses
