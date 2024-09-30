@@ -1191,8 +1191,9 @@ class alt_data_generator(data_generator_ae):
         """
         if self.generations != 0:
             n_recombined_samples = self.total_batch_size - self.batch_size
-
-            self.n_recombined_samples_per_generation = math.ceil(n_recombined_samples / self.generations)
+            tf.print(n_recombined_samples)
+            tf.print( self.generations)
+            self.n_recombined_samples_per_generation = self.batch_size# math.ceil(n_recombined_samples / self.generations)
 
             if n_recombined_samples % self.generations == 0:
                 self.n_recombined_samples_last_generation = self.n_recombined_samples_per_generation
@@ -1234,7 +1235,6 @@ class alt_data_generator(data_generator_ae):
 
             This version is used to give samples to tfrecord. Draw no parent samples.
         """
-
         if training:
             training = True
             n_samples = self.n_train_samples
@@ -1404,13 +1404,11 @@ class alt_data_generator(data_generator_ae):
         else:
             num_recombined_sample_this_generation = self.n_recombined_samples_per_generation
 
-        artificial_superpop = tf.reshape(tf.convert_to_tensor(["zArtificial"] * num_recombined_sample_this_generation),
-                                        [num_recombined_sample_this_generation, 1])
+        num_recombined_sample_this_generation = tf.shape(x)[0]
+        artificial_superpop = tf.reshape(tf.repeat(["zArtificial"], num_recombined_sample_this_generation),[num_recombined_sample_this_generation, 1])
 
-        new_sample_subpops = tf.reshape(
-            tf.convert_to_tensor(["Artificial_{}x".format(self.generations - self.generations_left + 1) for i in
-                                  range(num_recombined_sample_this_generation)]),
-            [num_recombined_sample_this_generation, 1])
+        new_sample_subpops = tf.reshape(tf.repeat("Artificial_{}x".format(self.generations - self.generations_left + 1), num_recombined_sample_this_generation),[num_recombined_sample_this_generation, 1])
+
 
         new_fam = tf.concat([artificial_superpop, new_sample_subpops], axis=1)
 
@@ -1418,6 +1416,70 @@ class alt_data_generator(data_generator_ae):
 
         self.generations_left = self.generations_left - 1
 
+        return offspring_tensor, new_fam, original_genotypes, original_inds  # , [tf.cast(last_batch, tf.bool), training]
+
+    @tf.function
+    def recombination_mapping_for_tf_record_test_sparse(self, x, inds):
+        """
+            x here is one batch of data, which has shape (n_samples, n_markers)
+
+            For the TF record version, I will only recombine within the batches, which will change each epoch, so it
+            should not be an issue. With this I mean, all samples will have a chance to be recombined with all other samples IN THE SAME TFRECORD FILE
+
+            In the TF record version, THe number of samples in/out is the same, therefore we do not need to read a lot of samples in order to get unique recombinations.
+
+            The input to this function includes the genotypes for batch_size original samples,
+            and also a number or parent samples that will be used in the recombination.
+
+            the output will then have the shape (n_markers, n_samples)
+
+            Attempt at introducing generations, to do multiple run-throughs of the recombination mapping
+            TODO: Update description when completed with implementation
+
+        """
+        original_genotypes = x[:, :self.n_markers]
+        original_inds = inds
+
+        self.n_parent_samples()
+        genotypes_train = x
+
+        ind_pop_list = tf.convert_to_tensor(get_ind_pop_list(self.filebase)[self.sample_idx_train, 0])
+        num_samples = tf.cast(tf.math.ceil(tf.cast(tf.shape(x)[0], tf.float32) * self.recombination_rate), tf.int32)
+
+    
+        indices = tf.random.uniform([1 * num_samples, ], minval=0, maxval=num_samples, dtype=tf.dtypes.int32, seed=None, name=None)
+
+        genotypes_parents = tf.gather(genotypes_train, indices, axis=0)
+        genotypes_parents = tf.concat([genotypes_train,genotypes_parents], axis = 0)
+        offspring_tensor = tf.transpose(self.create_offspring_unlooped(tf.transpose(genotypes_parents)))
+
+        # Append the appropriate fam-entries.
+        if self.generations_left == 1:
+
+            num_recombined_sample_this_generation = self.n_recombined_samples_last_generation
+        else:
+            num_recombined_sample_this_generation = self.n_recombined_samples_per_generation
+        
+        num_recombined_sample_this_generation = tf.shape(x)[0]
+        artificial_superpop = tf.reshape(tf.repeat(["zArtificial"], num_recombined_sample_this_generation),[num_recombined_sample_this_generation, 1])
+
+
+        new_sample_subpops = tf.reshape(tf.repeat("Artificial_{}x".format(self.generations - self.generations_left + 1), num_recombined_sample_this_generation),[num_recombined_sample_this_generation, 1])
+
+        #new_sample_subpops = tf.reshape(tf.convert_to_tensor(["Artificial_{}x".format(self.generations - self.generations_left + 1) for i in tf.range(num_recombined_sample_this_generation)]),[num_recombined_sample_this_generation, 1])
+
+
+        new_fam = tf.concat([artificial_superpop, new_sample_subpops], axis=1)
+
+        new_fam = new_fam[:num_samples, :]
+        tf.print(tf.shape(new_fam))
+        self.generations_left = self.generations_left - 1
+
+        # New for the sparse thing
+        offspring_tensor = tf.concat([genotypes_train,offspring_tensor], axis = 0)
+        tf.print(tf.shape(offspring_tensor))
+
+        new_fam = tf.concat([original_inds, new_fam], axis = 0)
         return offspring_tensor, new_fam, original_genotypes, original_inds  # , [tf.cast(last_batch, tf.bool), training]
 
     def create_offspring_unlooped(self, parent_array):
@@ -1511,6 +1573,7 @@ class alt_data_generator(data_generator_ae):
         offspring = st0 + st1
         return offspring
 
+    @tf.function
     def normalize_mapping_for_tf_record(self, x, inds, args):
         """
 
@@ -1533,41 +1596,52 @@ class alt_data_generator(data_generator_ae):
         missing_tensor = tf.sparse.SparseTensor(indices=missing_indices,
                                    values=tf.ones(shape=tf.shape(missing_indices)[0], dtype=tf.float32),
                                    dense_shape=(num_samples, self.n_markers))
+        
+        impute_missing = self.impute_missing
+
+
+        # TEST
+
+        #if args[1]:
+        #    tf.print("TRAINING, imputing")
+        #    impute_missing = True
+        #else: 
+        #    tf.print("VALIDATION, not imputing")
+        #    impute_missing = False
+
 
         indices = missing_indices[:, 1]
         x = tf.transpose(x)
-        if self.impute_missing and False:
-            fix_missing = tf.sparse.SparseTensor(indices=missing_indices,
-                                       values=(tf.gather(self.most_common_genos, indices=indices) - 9),
-                                       dense_shape=(num_samples, self.n_markers))
-
-            x = tf.sparse.add(x, fix_missing)
-
-            # This is more optimal, most likely. At least more succinct.
-            #tf.tensor_scatter_nd_add(tensor, indices, updates)
+        if impute_missing: # and False:
+            
+            updates = tf.gather(self.most_common_genos, indices=indices)
+            x = tf.tensor_scatter_nd_update(x, missing_indices, updates, name=None)
+ 
 
 
         if self.normalization_mode == "genotypewise01":
             if self.normalization_options["flip"]:
                 # This operation results in the missing values having a value of -7/2, wrong! Amend this by adding 3.5-missing_val
-                x = -(x - 2) / 2
-                if not self.impute_missing:
-                    x = tf.sparse.add(x, missing_tensor * (3.5 + self.missing_val))
+                x = -(x - self.max_val) / 2
+                if not impute_missing:
+                    x = tf.sparse.add(x, missing_tensor * ((9-self.max_val)/2 + self.missing_val))
             else:
                 # This operation results in the missing values having a value of 4.5, wrong! Amend this by subtracting 4.5-missing_val
                 x = x / 2
-                if not self.impute_missing:
+                if not impute_missing:
                     x = tf.sparse.add(x, missing_tensor * (self.missing_val - 4.5))
 
         elif self.normalization_mode == "standard" or self.normalization_mode == "smartPCAstyle":
             if self.normalization_options["flip"]:
-                x = -(x - 2)
+                x = -(x - self.max_val)
             x2 = (x - tf.cast(self.scaler.mean_,tf.float32)) / tf.cast(tf.math.sqrt(self.scaler.var_),tf.float32)
-            if not self.impute_missing:
+            if not impute_missing:
                 x = tf.sparse.add(x2, missing_tensor.__mul__(self.missing_val - x2))
+
 
         return x, inds, last_batch
 
+    @tf.function
     def sparse_mapping_for_tf_record(self, x, inds, original_genotypes, original_inds):
         """
 
@@ -1587,6 +1661,7 @@ class alt_data_generator(data_generator_ae):
         except:
             pass
 
+        #tf.print(sparsify_fraction)
         num_samples = tf.shape(x)[0]
         missing_value = self.missing_val
 
@@ -1611,7 +1686,7 @@ class alt_data_generator(data_generator_ae):
             return input_data_train, x, inds, original_genotypes, original_inds
         else:
             return input_data_train[:, :, 0], x, inds, original_genotypes[:, :, 0], original_inds
-
+    @tf.function
     def sparse_mapping_for_tf_record_contrastive(self, x, inds, original_genotypes, original_inds):
         """
         Sets a fraction of the data to be missing. An augmentation in order to reduce overfitting.
@@ -1620,7 +1695,7 @@ class alt_data_generator(data_generator_ae):
         This generates samples as [anchors, positives], that can be extracted as such, and fed to the model, and subsequently the contrastive losses.
 
         """
-        if self.sparsify_input and self.training or self.contrastive:
+        if self.sparsify_input and self.training :
             sparsify_fraction = tf.random.shuffle(self.sparsifies)[0]
         else:
             sparsify_fraction = 0.0
@@ -1632,7 +1707,14 @@ class alt_data_generator(data_generator_ae):
 
         if not self.training:
             pass
+        
+        #tf.print(tf.shape(x))
+        #x = x[:,tf.newaxis]
         x = tf.concat([x, x], axis=0)
+
+        #tf.print(sparsify_fraction)
+        if self.training:
+            x = x + tf.random.normal(tf.shape(x))*0.0
 
         num_samples = tf.shape(x)[0]
 
@@ -1661,6 +1743,214 @@ class alt_data_generator(data_generator_ae):
         else:
 
             return input_data_train[:, :, 0], x, inds, original_genotypes[:, :, 0], original_inds
+            
+            
+    #@tf.function
+    def sparse_mapping_for_tf_record_contrastive_test(self, x, inds, original_genotypes, original_inds):
+        """
+        Sets a fraction of the data to be missing. An augmentation in order to reduce overfitting.
+
+        For contrastive learning, we want to have two sparsified samples for each sample. Just stack the samples on top once, then sparsify.
+        This generates samples as [anchors, positives], that can be extracted as such, and fed to the model, and subsequently the contrastive losses.
+
+        """
+        if self.sparsify_input and self.training or self.contrastive:
+            sparsify_fraction = tf.random.shuffle(self.sparsifies)[0]
+        else:
+            sparsify_fraction = 0.0
+        try:
+            if self.project:
+                sparsify_fraction = 0.0
+        except:
+            pass
+
+        if not self.training:
+            pass
+        
+        #tf.print(tf.shape(x))
+        #x = x[:,tf.newaxis]
+        x = tf.concat([x, x], axis=0)
+
+        #tf.print(sparsify_fraction)
+        if self.training:
+            x = x + tf.random.normal(tf.shape(x))*0.0
+
+        num_samples = tf.shape(x)[0]
+
+        missing_value = self.missing_val
+
+        #mask = tf.experimental.numpy.full(shape=(num_samples, self.n_markers), fill_value=1.0,dtype=tf.float32)
+
+
+        b = tf.random.uniform(shape=(num_samples, self.n_markers), minval=0, maxval=1)
+        mask = tf.where(b < sparsify_fraction, 1., 0.)
+
+
+        #indices = tf.where(b < sparsify_fraction)
+        #b = tf.sparse.SparseTensor(indices=indices,values=(tf.repeat(-1.0, tf.shape(indices)[0])),dense_shape=(num_samples, self.n_markers))
+        #mask = tf.sparse.add(mask, b)
+
+        sparsified_data = tf.math.add(tf.math.multiply(x, mask), -1 * missing_value * (mask - 1))
+        input_data_train = tf.stack([sparsified_data, mask], axis=-1)
+
+        #original_data_mask = tf.experimental.numpy.full(shape=(tf.shape(original_genotypes)[0], self.n_markers),
+        #                                                fill_value=1.0,
+        #                                               dtype=tf.float32)
+        original_data_mask = tf.ones(shape=(tf.shape(original_genotypes)[0], self.n_markers))
+        original_genotypes = tf.stack([original_genotypes[:, :self.n_markers], original_data_mask], axis=-1)
+        #tf.print(sparsified_data)
+        if self.missing_mask_input:
+            return input_data_train, x, inds, original_genotypes, original_inds
+
+        else:
+
+            return input_data_train[:, :, 0], x, inds, original_genotypes[:, :, 0], original_inds
+
+    @tf.function
+    def sparse_mapping_for_tf_record_contrastive2(self, x, inds, original_genotypes, original_inds):
+        """
+        Sets a fraction of the data to be missing. An augmentation in order to reduce overfitting.
+
+        For contrastive learning, we want to have two sparsified samples for each sample. Just stack the samples on top once, then sparsify.
+        This generates samples as [anchors, positives], that can be extracted as such, and fed to the model, and subsequently the contrastive losses.
+
+        """
+        
+
+        if self.sparsify_input and self.training or self.contrastive:
+            sparsify_fraction = tf.random.shuffle(self.sparsifies)[0]
+        else:
+            sparsify_fraction = 0.0
+        try:
+            if self.project:
+                sparsify_fraction = 0.0
+        except:
+            pass
+
+        if not self.training:
+            pass
+        #tf.print(tf.shape(x))
+        x = x[tf.newaxis,:]
+        inds = inds[tf.newaxis,:]
+        original_genotypes = original_genotypes[tf.newaxis,:]
+        x = tf.concat([x, x], axis=0)
+
+        #tf.print(sparsify_fraction)
+        if self.training:
+            x = x + tf.random.normal(tf.shape(x))*0.0
+        
+        num_samples = tf.shape(x)[0]
+
+        missing_value = self.missing_val
+
+        mask = tf.experimental.numpy.full(shape=(2,self.n_markers), fill_value=1.0,
+                                          dtype=tf.float32)
+        b = tf.random.uniform(shape=(2,self.n_markers), minval=0, maxval=1)
+
+        indices = tf.where(b < sparsify_fraction)
+
+        b = tf.sparse.SparseTensor(indices=indices,
+                                   values=(tf.repeat(-1.0, tf.shape(indices)[0])),
+                                   dense_shape=(2,self.n_markers))
+        mask = tf.sparse.add(mask, b)
+        
+        sparsified_data = tf.math.add(tf.math.multiply(x, mask), -1 * missing_value * (mask - 1))
+
+        input_data_train = tf.stack([sparsified_data, mask], axis=-1)
+
+        original_data_mask = tf.experimental.numpy.full(shape=(1,self.n_markers),
+                                                        fill_value=1.0,
+                                                        dtype=tf.float32)
+
+        original_genotypes = tf.stack([original_genotypes[ :self.n_markers], original_data_mask], axis=-1)
+        """
+        """
+        #return 0 
+        
+        if self.missing_mask_input:
+            return input_data_train, x, inds, original_genotypes, original_inds
+
+        else:
+
+            return input_data_train[ :, 0], x, inds, original_genotypes[ :, 0], original_inds
+
+        
+        # x, inds, original_genotypes, original_inds
+
+
+    def sparse_mapping_for_tf_record_contrastive3(self, x, inds, original_genotypes, original_inds):
+        """
+        Sets a fraction of the data to be missing. An augmentation in order to reduce overfitting.
+
+        For contrastive learning, we want to have two sparsified samples for each sample. Just stack the samples on top once, then sparsify.
+        This generates samples as [anchors, positives], that can be extracted as such, and fed to the model, and subsequently the contrastive losses.
+
+        """
+        
+
+        if self.sparsify_input and self.training or self.contrastive:
+            sparsify_fraction = tf.random.shuffle(self.sparsifies)[0]
+        else:
+            sparsify_fraction = 0.0
+        try:
+            if self.project:
+                sparsify_fraction = 0.0
+        except:
+            pass
+
+        if not self.training:
+            pass
+        #tf.print(tf.shape(x))
+        x = x[tf.newaxis,:]
+        inds = inds[tf.newaxis,:]
+        original_genotypes = original_genotypes[tf.newaxis,:]
+        x = tf.concat([x, x], axis=0)
+
+        #tf.print(sparsify_fraction)
+        if self.training:
+            x = x + tf.random.normal(tf.shape(x))*0.0
+        
+        num_samples = tf.shape(x)[0]
+
+        missing_value = self.missing_val
+
+        mask = tf.experimental.numpy.full(shape=(2,self.n_markers), fill_value=1.0,
+                                          dtype=tf.float32)
+        b = tf.random.uniform(shape=(2,self.n_markers), minval=0, maxval=1)
+        
+        indices = tf.where(b < sparsify_fraction)
+
+        b = tf.sparse.SparseTensor(indices=indices,
+                                   values=(tf.repeat(-1.0, tf.shape(indices)[0])),
+                                   dense_shape=(2,self.n_markers))
+        mask = tf.sparse.add(mask, b)
+        
+        sparsified_data = tf.math.add(tf.math.multiply(x, mask), -1 * missing_value * (mask - 1))
+
+        input_data_train = tf.stack([sparsified_data, mask], axis=-1)
+
+        original_data_mask = tf.experimental.numpy.full(shape=(1,self.n_markers),
+                                                        fill_value=1.0,
+                                                        dtype=tf.float32)
+
+        original_genotypes = tf.stack([original_genotypes[ :self.n_markers], original_data_mask], axis=-1)
+        """
+        """
+        #return 0 
+        
+        if self.missing_mask_input:
+            return input_data_train, x, inds, original_genotypes, original_inds
+
+        else:
+
+            return input_data_train[ :, 0], x, inds, original_genotypes[ :, 0], original_inds
+
+        
+        # x, inds, original_genotypes, original_inds
+
+
+
+
 
     def create_temp_fam_and_superpop(self, data_prefix, superpopulations_file, n_train_batches):
 
@@ -1718,8 +2008,20 @@ class alt_data_generator(data_generator_ae):
 
     def prep_normalizer(self, ds):
         # TODO- Fix so that the normalizer is calibrated with more samples than it is trained with (in each batch). In this case, if very few samples are used, there may be some issues if all have missing data at the same marker position
+        # THIS STUFF HAS BEEN ALTERED TO HANDLE POLYPLOIDY, NOT ASSUMING DIPLOID.
 
-        genotype_counts = tf.zeros([self.n_markers, 3], dtype = tf.float32)
+
+        max_val = 0
+        for batch_data, batch_label, _ in ds:
+            #tf.print(max_val)
+            #xx = tf.gather(batch_data, tf.where(batch_data != 9))
+
+            #tf.print(tf.unique(tf.reshape(batch_data, [-1]) )[0])
+            bat_max  = tf.reduce_max(batch_data[batch_data!=9])
+            if max_val < bat_max and bat_max != 9: # largest value, except for missing
+                max_val = bat_max
+        self.max_val = max_val
+        genotype_counts = tf.zeros([self.n_markers, max_val+1], dtype = tf.float32)
 
         compute_class_conc = False
 
@@ -1742,7 +2044,7 @@ class alt_data_generator(data_generator_ae):
 
             for batch_data, batch_label, _ in ds:
 
-
+                max_val = tf.reduce_max(batch_data)
                 #last_batch = args[0]
                 # THIS LINE THREW A MULTITUDE OF ERRORS, SWITCHING BETWEEN DIFFERENT LINES AND MESSAGES. WHY?
 
@@ -1759,12 +2061,13 @@ class alt_data_generator(data_generator_ae):
                 # mess up the fitting of the scaler.
 
                 if self.normalization_options["flip"]:
-                    batch_data = -(batch_data - 2)  # This sends 1 to 1, 0 to 2, and 2 to 0
+                    batch_data = -(batch_data - max_val)  # This sends 1 to 1, 0 to 2, and 2 to 0
 
                 self.scaler.partial_fit(tf.transpose(tf.sparse.add(a, batch_data)))
-                for k in range(3):
-                    inds = tf.concat([tf.range(self.n_markers)[:,tf.newaxis], tf.ones([self.n_markers,1], tf.int32)*k ], axis = 1)
-                    genotype_counts = tf.tensor_scatter_nd_update(genotype_counts, inds,genotype_counts[:,k] + tf.reduce_sum(tf.cast(batch_data == k, tf.float32), axis=1) )
+                for k in tf.range(self.max_val+1):
+
+                    inds = tf.concat([tf.range(self.n_markers)[:,tf.newaxis], tf.ones([self.n_markers,1], tf.int32)*tf.cast(k, tf.int32) ], axis = 1)
+                    genotype_counts = tf.tensor_scatter_nd_update(genotype_counts, inds,genotype_counts[:,tf.cast(k, tf.int32) ] + tf.reduce_sum(tf.cast(batch_data == k, tf.float32), axis=1) )
 
                 if compute_class_conc:
                     pop_inds = tf.where(batch_label[:, 1, tf.newaxis] == superpops[:, 0])[:, 1]
@@ -1773,7 +2076,7 @@ class alt_data_generator(data_generator_ae):
 
                     #for sample in range(num_samples):
                     for sample in tf.range(tf.shape(batch_data)[1]):
-                        for k in range(3):
+                        for k in tf.range(self.max_val+1):
                             #temp_pop[pop_inds[sample], :, k] += tf.transpose(tf.cast(batch_data[:, sample] == k, tf.int32))
 
                             #tf.print(f"{tf.concat([tf.ones([tf.shape(temp_pop)[0],1], tf.int32)*tf.cast(pop_inds[sample],tf.int32),tf.range(tf.shape(temp_pop)[0])[:,tf.newaxis], tf.ones([tf.shape(temp_pop)[0],1], tf.int32)*k ], axis = 1)} lol ")
@@ -1794,7 +2097,6 @@ class alt_data_generator(data_generator_ae):
                 self.baseline_concordance_pop_informed = tf.reduce_sum(tf.reduce_mean(tf.reduce_max(temp_pop, axis=2), 1) / tf.reduce_sum(pop_counts[:, 0]))
 
             self.most_common_genos = tf.cast(tf.transpose(tf.math.argmax(genotype_counts, axis=1)), tf.float32)
-
             self.baseline_concordance = tf.reduce_mean(tf.reduce_max(genotype_counts, axis=1) / self.n_train_samples)
 
             # Compute baseline concordances for k-mers
@@ -1881,16 +2183,15 @@ class alt_data_generator(data_generator_ae):
             self.scaler.mean_ = 0
             self.scaler.var = 1
             self.prep_normalizer(ds)  # This generates the needed scalers for normalization´using standard and smartPCAstyle
+
         ds = ds.map(self.normalize_mapping_for_tf_record, num_parallel_calls=1)  # tf.data.AUTOTUNE)
+
         if "SLURM_JOBID" in os.environ:
             if int(os.environ["SLURM_LOCALID"]) != 0:
-                time.sleep(10)
+                time.sleep(3)
                 print("proc", int(os.environ["SLURM_PROCID"]) , "sleeping for 10 wating for data file creation by chief.")
 
-            #else:
-            #    print(" Chief:",  int(os.environ["SLURM_PROCID"]), int(os.environ["SLURM_LOCALID"])    )
-            #print("localid: ", int(os.environ["SLURM_LOCALID"]))
-       
+
         if not os.path.isdir(outdir ):
             #write_genotypes_to_tfr_long(self, dataset=ds,out_dir = outdir,filename = self.filebase.split("/")[-1],n_markers = self.n_markers,n_workers = n_workers,mode=mode)
 
@@ -1899,35 +2200,138 @@ class alt_data_generator(data_generator_ae):
 
         pattern = "*" + self.filebase.split("/")[-1] + ".tfrecords"
 
-        #ds = get_dataset_large(tfr_dir=outdir, pattern=pattern)  # , device_id = device_id)
+        ok = False
+        if "SLURM_JOBID" in os.environ:
+                    if int(os.environ["SLURM_LOCALID"]) != 0:
+                        tf.print("Trying to read files  :)")
+                        while ok == False:
+                                try:
+                                    ds = get_dataset_large_mult_dir(tfr_dir=outdir, pattern=pattern)  # , device_id = device_id)
+                                    ok = True
+                                except: pass
+
         ds = get_dataset_large_mult_dir(tfr_dir=outdir, pattern=pattern)  # , device_id = device_id)
-
-        ds = ds.shuffle(
-            self.n_train_samples + 2)  # TODO, enough to just take more, or does it need to be something specific?
-
-        ds = ds.prefetch(1)  # tf.data.AUTOTUNE)
-
-        # This has to now be batched using the local batch size, compared to the other pipeline where we first batch, then shard.
-        ds = ds.batch(
-            self.batch_size // n_workers)
-
+        
+        ds = ds.batch(self.batch_size // n_workers)
         if self.recombination and self.training:
             for _ in range(self.generations):
-                ds = ds.map(self.recombination_mapping_for_tf_record, num_parallel_calls=tf.data.AUTOTUNE)
+                ds = ds.map(self.recombination_mapping_for_tf_record_test_sparse, num_parallel_calls=tf.data.AUTOTUNE)
+        elif self.contrastive:
+            ds = ds.map(self.TFR_passthrough_double, num_parallel_calls=tf.data.AUTOTUNE)
         else:
             ds = ds.map(self.TFR_passthrough, num_parallel_calls=tf.data.AUTOTUNE)
 
+        ds = ds.map(self.TFR_passthrough__layer_test, num_parallel_calls=tf.data.AUTOTUNE)
+        ds = ds.prefetch(tf.data.AUTOTUNE)
+
+        """ 
         if self.contrastive == True:
-            ds = ds.map(self.sparse_mapping_for_tf_record_contrastive, num_parallel_calls=tf.data.AUTOTUNE)
+            ds = ds.map(self.sparse_mapping_for_tf_record_contrastive2, num_parallel_calls=tf.data.AUTOTUNE)
 
         else:
-
+            
             ds = ds.map(self.sparse_mapping_for_tf_record, num_parallel_calls=tf.data.AUTOTUNE)
+        
+        #ds = ds.shuffle(self.n_train_samples + 2)  # TODO, enough to just take more, or does it need to be something specific?
+        """
+      
+        # This has to now be batched using the local batch size, compared to the other pipeline where we first batch, then shard.
+        #ds = ds.prefetch(tf.data.AUTOTUNE)
+ 
 
         return ds
 
+    def re_read_dataset(self, pref_chunk_size, mode, n_workers, shuffle=True):  # , device_id = 0):
+        """
+
+        This version is used to re-shuffle the files used in the tf-record dataset, while not re-writing the files.
+
+        Normalizes the data after having read the parquet file, then writes the data to tfrecord files which can be read faster, and in parallel
+
+        """
+
+        if mode == "training" or mode == "project":
+            training = True
+        elif mode == "validation":
+            training = False
+        else:
+            print("pass either training or validation")
+
+        self.training = training
+
+
+        berra_scratch_dir = "/scratch2/temp/"
+
+        if "SLURM_JOBID" in os.environ:
+            outdir = berra_scratch_dir + os.environ["SLURM_JOBID"] +"/"+mode +"/"
+        else:
+            outdir = "Data/temp/" +mode+ "/"
+
+ 
+        pattern = "*" + self.filebase.split("/")[-1] + ".tfrecords"
+       
+        ds = get_dataset_large_mult_dir(tfr_dir=outdir, pattern=pattern)  # , device_id = device_id)
+        
+        ds = ds.shuffle(1000)
+
+
+        ds = ds.batch(self.batch_size // n_workers)
+        if self.recombination and self.training:
+            for _ in range(self.generations):
+                ds = ds.map(self.recombination_mapping_for_tf_record_test_sparse, num_parallel_calls=tf.data.AUTOTUNE)
+        elif self.contrastive:
+            ds = ds.map(self.TFR_passthrough_double, num_parallel_calls=tf.data.AUTOTUNE)
+        else:
+            ds = ds.map(self.TFR_passthrough, num_parallel_calls=tf.data.AUTOTUNE)
+
+        ds = ds.map(self.TFR_passthrough__layer_test, num_parallel_calls=tf.data.AUTOTUNE)
+        ds = ds.prefetch(tf.data.AUTOTUNE)
+
+    
+        return ds
+
+
+
+
+
+    @tf.function
+    def TFR_passthrough2(self, x, inds):
+        #x = x[tf.newaxis,:]
+        return x[:self.n_markers], inds, x[:self.n_markers], inds
+        
+
+    @tf.function
+    def TFR_passthrough__layer_test(self, x, inds, original_genotypes, original_inds):
+        if self.missing_mask_input:
+            return x, x, inds, original_genotypes, original_inds
+
+        else:
+
+            return x, x, inds, x, original_inds
+        return 
+
+
+    @tf.function
+    def TFR_passthrough3(self, input_data_train, x, inds, original_genotypes, original_inds):
+
+        y = tf.concat([input_data_train[:,0,:,:],input_data_train[:,1,:,:]], axis = 0)
+        x = tf.concat([x[:,0,:],x[:,1,:]], axis = 0)
+        inds = tf.squeeze(inds)
+        #x = x[tf.newaxis,:]
+        return y, x, inds, original_genotypes, original_inds
+
+    @tf.function
+    def TFR_passthrough_double(self, x, inds):
+            x_out = x[:, :self.n_markers]
+            #x_out = tf.concat([x_out,x_out],axis = 0)
+
+            return x_out, inds, x_out, inds
+
+    @tf.function
     def TFR_passthrough(self, x, inds):
-        return x[:, :self.n_markers], inds, x[:, :self.n_markers], inds
+            x_out = x[:, :self.n_markers]
+
+            return x_out, inds, x_out, inds
 
 def parquet_converter(filebase, max_mem_size):
     """

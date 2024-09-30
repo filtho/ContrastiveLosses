@@ -1,0 +1,32 @@
+{"layers":
+  [ 
+    {"class": "sep_sparse_oh", "module":"utils.layers", "args": {"max_noise":0.99 ,"max_sparse": 0.99}},
+
+    {"class": "Conv1D", "module":"tf.keras.layers", "args": {"filters":5, "kernel_size":3, "padding":"same","strides":1}},
+    {"class": "Activation", "module":"tf.keras.layers", "args": {"activation":"silu"}},
+
+    {"class": "Conv1D", "module":"tf.keras.layers", "args": {"filters":5, "kernel_size":3, "padding":"same","strides":1}},
+    {"class": "Activation", "module":"tf.keras.layers", "args": {"activation":"silu"}},
+
+    {"class": "Flatten", "module":"tf.keras.layers", "args": {}},
+    {"class": "Dropout", "module":"tf.keras.layers", "args": {"rate":0.01}},
+
+    {"class": "Dense", "module":"tf.keras.layers", "args": {"units":256, "trainable":true,"name":"high_dim", "use_bias":false } },
+    {"class": "BatchNormalization", "module":"tf.keras.layers", "args": {}},
+    {"class": "Activation", "module":"tf.keras.layers", "args": {"activation":"silu"}},
+
+    {"class": "Dense", "module":"tf.keras.layers", "args": {"units":256, "trainable":true, "use_bias":false} },
+    {"class": "BatchNormalization", "module":"tf.keras.layers", "args": {}},
+    {"class": "Activation", "module":"tf.keras.layers", "args": {"activation":"silu"}},
+
+    {"class": "Dense", "module":"tf.keras.layers", "args": {"units":256,"trainable":true, "use_bias":false} },
+    {"class": "BatchNormalization", "module":"tf.keras.layers", "args": {}},
+    {"class": "Activation", "module":"tf.keras.layers", "args": {"activation":"silu"}},
+    
+    {"class": "Dropout", "module":"tf.keras.layers", "args": {"rate":0.01}},
+    {"class": "Dense", "module":"tf.keras.layers", "args": {"units":75, "use_bias":false}},
+    {"class": "dense_with_l2_normalization", "module":"utils.layers", "encoding" : true, "args" : {"units": 3, "name":"encoded_l2normed", "dtype":"float32", "use_bias":false}}
+
+  ]
+  
+  }

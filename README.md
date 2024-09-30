@@ -1,10 +1,3 @@
-# <ins>__PAG 31__</ins>
-## To see other related visualizations, check out [this website.](https://filtho.github.io)
-
-This repo contains the code that has produced the embeddings using contrastive learning, as shown at PAG31, [poster number 676](https://filtho.github.io/poster.pdf) and at ICQG7, [poster number 92](https://filtho.github.io/poster_icqg7.pdf) (day 2).
-The poster presented at PAG 31 contained some smaller errors. Most notably in Figure 3 shows PCA with 10 dimensions, instead of 2.
-![errata image figure 3](example_figures/test_errata.png)
-
 
 
 
@@ -66,6 +59,8 @@ To plot results for saved model states in a directory, run
 ![Results on Dog dataset](gcae/animated.gif)
 
 
+This model has a 2-dimensional output. The model "CM_3D_test9oh8nb2"is the one used in the preprint, and has a normalized 3-dimensional output.
+
 ## Some notes:
 
 Depending on the hardware setup, some minor changes may need to be made for the code to run. One issue could be the GPU running out of memory. Reducing the batch size in the train_opts file could be one fix, another would be to use less variants, toggled in the data_opts file. For my current hardware setup, I had to explicitly allocate more memory than tensorflow automatically did. This can be done by adding the line 
@@ -107,3 +102,12 @@ The code yields the following results:
 ![Results on Fashion-MNIST](example_figures/fashion_mnist_example.png)
 
 
+
+# PAG 31
+
+
+## To see other related visualizations, check out [this website.](https://filtho.github.io)
+
+This repo contains the code that has produced the embeddings using contrastive learning, as shown at PAG31, [poster number 676](https://filtho.github.io/poster.pdf) and at ICQG7, [poster number 92](https://filtho.github.io/poster_icqg7.pdf) (day 2).
+The poster presented at PAG 31 contained some smaller errors. Most notably in Figure 3 shows PCA with 10 dimensions, instead of 2.
+![errata image figure 3](example_figures/test_errata.png)

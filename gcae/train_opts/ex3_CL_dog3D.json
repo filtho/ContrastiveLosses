@@ -1,0 +1,33 @@
+{
+  "learning_rate": 0.001,
+  "batch_size":32,
+  "noise_std": 0.01,
+  "n_samples": -1,
+  "loss": {
+    "module": "CL",
+    "class": "centroid",
+    "args": {
+      "n_pairs": 256,
+      "mode": "distance_weighted_random",
+      "distance": "L2"
+    }
+  },
+  "regularizer": {
+    "module": "tf.keras.regularizers",
+    "class": "l2",
+    "reg_factor": 1e-7,
+    "rep_factor": 0.033e-02,
+    "max_rep": 0.0,
+    "ord": 2,
+    "flipsquare": true,
+    "box_area": 1000000,
+    "box_factor": 0
+  },
+  "lr_scheme": {
+    "module": "tf.keras.optimizers.schedules",
+    "class": "ExponentialDecay",
+    "args": {
+         "decay_rate": 0.99,
+         "decay_every": 10,
+         "staircase": false}}
+}

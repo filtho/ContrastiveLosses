@@ -28,6 +28,9 @@ Options:
 
 """
 
+
+import tensorflow_models as tfm
+
 from docopt import docopt, DocoptExit
 import os
 import math
@@ -76,6 +79,10 @@ from sklearn.decomposition import PCA
 from sklearn import linear_model
 
 
+from keras import backend as K
+from keras.optimizers import Optimizer
+
+
 
 if "SLURM_JOBID" in os.environ:
     try:
@@ -96,11 +103,15 @@ k_vec = [1,2,3,4,5]
 gpus = tf.config.experimental.list_physical_devices('GPU')
 #tf.config.experimental.set_virtual_device_configuration(gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3500)])
 
+print(f"GPUS:")
+
+
+
 enable_mixed_precision = True
 if enable_mixed_precision:
-    my_type = tf.float16
+    my_dtype = tf.float16
 else:
-    my_type = tf.float32
+    my_dtype = tf.float32
 
 
 def chief_print(string):
@@ -164,16 +175,22 @@ def BayesianRidgepheno_tt(quant_train, quant_test, coord_train,coord_test):
 
     return corr, mse, pearr
 
-def append_to_file(path, data, epoch = None):
+def append_to_file(path, data, epoch = None, f1 = False):
 
     if _isChief():
         if epoch is not None:
             write = tf.concat([tf.reshape(epoch, [1, 1]), tf.reshape(data,[1,1])],axis = 1).numpy()[0]
         else:
             write = data
-        with open(path, 'a', newline='') as fd:
-            writer = csv.writer(fd)
-            writer.writerow([str(i) for i in write])
+        
+        if not f1:
+            with open(path, 'a', newline='') as fd:
+                writer = csv.writer(fd)
+                writer.writerow([str(i) for i in write])
+        else:
+            with open(path, 'w', newline='') as fd:
+                writer = csv.writer(fd)
+                writer.writerow([str(i) for i in write])
 
 GCAE_DIR = Path(__file__).resolve().parent
 class Autoencoder(Model):
@@ -194,7 +211,7 @@ class Autoencoder(Model):
         self.n_markers = n_markers
         self.noise_std = noise_std
         self.residuals = dict()
-        self.marker_spec_var = False
+        self.marker_spec_var = True
         self.passthrough = tf.Variable(1.0, dtype=tf.float32, trainable=False)
         self.cell_lock = tf.Variable(1.0, dtype=tf.float32, trainable=False)
 
@@ -227,11 +244,22 @@ class Autoencoder(Model):
             limit = 0.01 # math.sqrt(2 * 3 / (dim))
             layer_args["kernel_initializer"] = tf.keras.initializers.RandomUniform(-limit, limit)
 
+        if "kernel_initializer" in layer_args and layer_args["kernel_initializer"] == "mine":
+            dim = layer_args["units"]
+            limit = 0.01 # math.sqrt(2 * 3 / (dim))
+            layer_args["kernel_initializer"] = tf.keras.initializers.RandomNormal(mean = 0.0, stddev = 0.1)
+        if "input_shape" in layer_args and layer_args["input_shape"] == "None":
+
+            layer_args["input_shape"] = None
 
 
         if "kernel_regularizer" in layer_args and layer_args["kernel_regularizer"] == "L2":
 
-            layer_args["kernel_regularizer"] = tf.keras.regularizers.L2(l2=1e-8)
+            layer_args["kernel_regularizer"] = tf.keras.regularizers.L2(l2=1e-5)
+
+        for layer_def in model_architecture["layers"]:
+            if "args" in layer_def.keys() and "name" in layer_def["args"].keys() and "encoded" in layer_def["args"]["name"] and "units" in layer_def["args"].keys():
+                n_latent_dim = layer_def["args"]["units"]
 
         try:
             activation = getattr(tf.nn, layer_args["activation"])
@@ -272,6 +300,11 @@ class Autoencoder(Model):
                 limit = 0.01 # math.sqrt(2 * 3 / (dim))
                 layer_args["kernel_initializer"] = tf.keras.initializers.RandomUniform(-limit, limit)
 
+            if "kernel_initializer" in layer_args and layer_args["kernel_initializer"] == "mine":
+                dim = layer_args["units"]
+                limit = 0.01 # math.sqrt(2 * 3 / (dim))
+                layer_args["kernel_initializer"] = tf.keras.initializers.RandomNormal(mean = 0.0, stddev = 0.1)
+
 
 
 
@@ -279,7 +312,7 @@ class Autoencoder(Model):
                 layer_args["kernel_regularizer"] = tf.keras.regularizers.L2(l2=1e-6)
 
             if "activity_regularizer" in layer_args and layer_args["activity_regularizer"] == "L2":
-                layer_args["activity_regularizer"] = tf.keras.regularizers.L2(l2=1e-6 )
+                layer_args["activity_regularizer"] = tf.keras.regularizers.L2(l2=1e-6)
 
             if layer_def["class"] == "MaxPool1D":
                 ns.append(int(math.ceil(float(ns[-1]) / layer_args["strides"])))
@@ -302,7 +335,7 @@ class Autoencoder(Model):
             self.all_layers.append(this_layer)
 
         if noise_std >0 :
-            self.noise_layer = tf.keras.layers.GaussianNoise(noise_std)
+            self.noise_layer = tf.keras.layers.GaussianNoise(noise_std / np.sqrt(n_latent_dim))
         elif noise_std == 0:
             self.noise_layer = tf.keras.layers.GaussianNoise(0.)
 
@@ -311,8 +344,8 @@ class Autoencoder(Model):
 
         if self.marker_spec_var:
             random_uniform = tf.random_uniform_initializer()
-            self.ms_variable = tf.Variable(random_uniform(shape = (1, n_markers), dtype=my_type))#, name="marker_spec_var")
-            self.nms_variable = tf.Variable(random_uniform(shape = (1, n_markers), dtype=my_type))#, name="nmarker_spec_var")
+            self.ms_variable = tf.Variable(random_uniform(shape = (1, n_markers), dtype=tf.float32))#, name="marker_spec_var")
+            #self.nms_variable = tf.Variable(random_uniform(shape = (1, n_markers), dtype=my_dtype))#, name="nmarker_spec_var")
 
         else:
             chief_print("No marker specific variable.")
@@ -332,11 +365,14 @@ class Autoencoder(Model):
         if self.marker_spec_var:
             # Tiling it to handle the batch dimension
 
-            ms_tiled = tf.tile(self.ms_variable, (tf.shape(input_data)[0], 1))
-            ms_tiled = tf.expand_dims(ms_tiled, 2)
-            nms_tiled = tf.tile(self.nms_variable, (tf.shape(input_data)[0], 1))
-            nms_tiled = tf.expand_dims(nms_tiled, 2)
-            concatted_input = tf.concat([input_data, ms_tiled], 2)
+            #ms_tiled = tf.tile(self.ms_variable, (tf.shape(input_data)[0], 1))
+            ms_tiled = tf.squeeze(tf.tile(tf.cast(self.ms_variable,dtype =my_dtype), (tf.shape(input_data)[0],1)))
+
+            #ms_tiled = tf.expand_dims(ms_tiled, 2)
+            #nms_tiled = tf.tile(self.nms_variable, (tf.shape(input_data)[0], 1))
+            #nms_tiled = tf.expand_dims(nms_tiled, 2)
+            #concatted_input = tf.concat([input_data, ms_tiled], 2)
+            concatted_input = tf.stack([input_data, ms_tiled], -1)
             input_data = concatted_input
 
         if verbose:
@@ -349,8 +385,8 @@ class Autoencoder(Model):
             chief_print("layer {0}".format(counter))
             chief_print("--- type: {0}".format(type(first_layer)))
 
-        x = first_layer(inputs=input_data)
-
+        x = first_layer(inputs=input_data, training = is_training)
+        #tf.print(tf.shape(x))
         if "Residual" in first_layer.name:
             out = self.handle_residual_layer(first_layer.name, x, verbose=verbose)
             if not out == None:
@@ -389,8 +425,8 @@ class Autoencoder(Model):
 
 
                 have_encoded_raw = True
-                if self.noise_std:
-                    x = self.noise_layer(x, training = is_training)
+                #if self.noise_std is not:
+                x = self.noise_layer(x, training = is_training)
 
             # If this is the encoding layer, we add noise if we are training
             elif "encoded" in layer_name:
@@ -402,7 +438,7 @@ class Autoencoder(Model):
                 if not have_encoded_raw:
                     #tf.print(tf.reduce_max(tf.math.abs(x)), tf.reduce_max(x), tf.reduce_min(x), tf.reduce_mean(x[:,0]))
                     pass
-                if self.noise_std and not have_encoded_raw:
+                if self.noise_std is not None and not have_encoded_raw:
 
                     encoded_data_pure = x
                     encoded_data_pure = tf.keras.layers.Activation('linear', dtype='float32')(x) # This is to ascertain that the output has dtyoe float32. With mixed precision the computations are done in float16.
@@ -414,7 +450,7 @@ class Autoencoder(Model):
                 #flipsquare = False
                 #if self.regularizer and "flipsquare" in self.regularizer:
                 #    flipsquare = self.regularizer["flipsquare"]
-                
+
                 if "basis" in layer_name:
                     basis = tf.expand_dims(tf.range(-200., 200., 20.), axis=0)
                     x = tf.clip_by_value(tf.concat([tf.expand_dims(x[:,i], axis=1) - basis for i in range(2)], axis=1), -40., 40.)
@@ -428,12 +464,12 @@ class Autoencoder(Model):
             if "i_msvar" in layer_name and self.marker_spec_var:
                 x = self.injectms(verbose, x, layer_name, ms_tiled, self.ms_variable)
 
-            if "nms" in layer_name and self.marker_spec_var:
-                x = self.injectms(verbose, x, layer_name, nms_tiled, self.nms_variable)
+            #if "nms" in layer_name and self.marker_spec_var:
+            #    x = self.injectms(verbose, x, layer_name, nms_tiled, self.nms_variable)
 
             if verbose:
                 chief_print("--- shape: {0}".format(x.shape))
-            
+
             if layer_name == "high_dim":
                 high_dim = x
 
@@ -449,24 +485,8 @@ class Autoencoder(Model):
                     box_area = self.regularizer["box_area"]
                 else:
                     box_area = 0
-
-
-            #reg_loss = self.regularizer["reg_factor"] * (box_factor* tf.reduce_sum(tf.math.maximum(tf.constant(0.), tf.square(encoded_data_pure) - 1 * box_area))) #  + 0.* dist_penalty+  0.* tf.reduce_sum(50 * ( -self.cell_lock*0.05 + tf.math.maximum(self.cell_lock*0.05,tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/period))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/period))))))) #  / tf.math.abs(tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))   )  ))
-            #reg_loss = self.regularizer["reg_factor"] * tf.reduce_sum(tf.math.maximum(0., tf.square(encoded_data_pure) - 1 * 40000.))
             reg_loss =  (box_factor* tf.reduce_sum(tf.math.maximum(tf.constant(0.), tf.square(encoded_data_pure) - 1 * box_area))) /box_area# / tf.cast(tf.shape(encoded_data_pure)[0], tf.float32) #  + 0.* dist_penalty+  0.* tf.reduce_sum(50 * ( -self.cell_lock*0.05 + tf.math.maximum(self.cell_lock*0.05,tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/period))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/period))))))) #  / tf.math.abs(tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))   )  ))
-            #tf.print(f"Reg_loss {reg_loss}")
-            #tf.print(tf.reduce_sum( 1 + 1 * tf.math.maximum(0.0,tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))))) #  / tf.math.abs(tf.math.sin((encoded_data_pure[:,0] * (2*math.pi/10))) * tf.math.sin((encoded_data_pure[:,1] * (2*math.pi/10)))   )  ))
-            #tf.print(tf.reduce_sum(tf.math.maximum(0., tf.square(encoded_data_pure) - 1 * 100)))
-            #reg_loss = self.regularizer["reg_factor"] * (tf.reduce_sum(tf.math.maximum(0., tf.square(encoded_data_pure) - 1 * 100)) + 0.1 + 0.1 * tf.math.sin((encoded_data_pure[:,0]) * (2*math.pi/10)) * tf.math.sin((encoded_data_pure[:,1]) * (2*math.pi/10)) / tf.math.abs(5 * tf.math.sin((encoded_data_pure[:,0]) * (2*math.pi/10)) * tf.math.sin((encoded_data_pure[:,1]) * (2*math.pi/10))))
 
-            # if this is a clustering self then the regularization is added to the raw encoding, not the softmaxed one
-            #if have_encoded_raw:
-            #	reg_loss = reg_func(encoded_data_pure)
-            #else:
-            #	reg_loss = reg_func(encoded_data)
-
-
-            #reg_loss += self.regularizer["reg_factor"] * tf.reduce_sum(tf.math.maximum(0., tf.square(x) - 1 * 36.))
             self.add_loss(reg_loss)
 
 
@@ -507,14 +527,7 @@ class Autoencoder(Model):
                     seconddiff -= shifteddiff * tf.math.reduce_sum(seconddiff * shifteddiff, axis=-1, keepdims=True) / (tf.norm(shifteddiff) + 1e-9)**2
                 diff = seconddiff
                 r2 = (tf.norm(diff, ord = self.regularizer["ord"], axis = -1))**tf.cast(self.regularizer["ord"], tf.float32) + self.regularizer["max_rep"]
-                #r2 *= 0.0001
-                #reploss += tf.math.reduce_sum(self.regularizer["rep_factor"] * tf.math.exp(-r2 * 0.2))
 
-
-                #self.add_loss(tf.math.reduce_sum(self.regularizer["rep_factor"] * (tf.math.reduce_mean(tf.where(targets == shifted_targets, 0.0, 1.0), axis=-1) * r2**-6.0 - r2**-3.0)))
-                # tf.norm(diff, ord = 2, axis = -1)
-                # * f.math.l2_normalize(diff, axis = -1)
-            #tf.print(reploss)
             self.add_loss(reploss)
 
         x = tf.keras.layers.Activation('linear', dtype='float32')(x) # This is to ascertain that the output has dtyoe float32. With mixed precision the computations are done in float16.
@@ -651,8 +664,6 @@ def alfreqvector(y_pred):
         return y_pred[:,:,0:3]#tf.nn.softmax(y_pred)
 
 
-
-
 def generatepheno(data, poplist):
     if data is None:
         return None
@@ -663,12 +674,8 @@ def generatepheno(data, poplist):
 def generatepheno2(pheno_data,pheno_names, poplist):
     if pheno_names is None:
         return None
-    #tf.print(pheno_names)
-    #tf.print(poplist[:,0])
     indsss = tf.where(poplist[:,0] == pheno_names[:,tf.newaxis])[:,0]
-    #tf.print(indsss)
-    #tf.print(pheno_data)
-    return tf.cast(tf.gather(pheno_data, indsss),tf.float16) # tf.expand_dims(tf.convert_to_tensor([data.get((fam, name), None) for name, fam in poplist]), axis=-1)
+    return tf.cast(tf.gather(pheno_data, indsss),my_dtype) # tf.expand_dims(tf.convert_to_tensor([data.get((fam, name), None) for name, fam in poplist]), axis=-1)
 
 def readpheno(file, num):
     with open(file, "rt") as f:
@@ -711,8 +718,10 @@ def main():
     tf.keras.backend.set_floatx('float32')
 
     if enable_mixed_precision:
-        mixed_precision.set_global_policy('mixed_float16')
-        
+        policy = mixed_precision.Policy('mixed_float16')
+
+        mixed_precision.set_global_policy(policy)
+
     try:
         arguments = docopt(__doc__, version='GenoAE 1.0')
     except DocoptExit:
@@ -773,12 +782,10 @@ def main():
         num_workers = 1
 
         strategy =  tf.distribute.MirroredStrategy()
-        #chief_print(tf.config.list_physical_devices(device_type='GPU'))
+        chief_print(f"GPUS: {tf.config.list_physical_devices(device_type='GPU')}")
 
-    #chief_print("slurm_job" + str(slurm_job))
     num_devices = strategy.num_replicas_in_sync
     chief_print('Number of devices: {}'.format(num_devices))
-
 
 
     if arguments["trainedmodeldir"]:
@@ -866,6 +873,8 @@ def main():
     for layer_def in model_architecture["layers"]:
         if "args" in layer_def.keys() and "name" in layer_def["args"].keys() and "encoded" in layer_def["args"]["name"] and "units" in layer_def["args"].keys():
             n_latent_dim = layer_def["args"]["units"]
+        if "args" in layer_def.keys() and "name" in layer_def["args"].keys() and "high_dim" in layer_def["args"]["name"] and "units" in layer_def["args"].keys():
+            n_high_dim = layer_def["args"]["units"]
     tf.print("LATENT DIM: ", n_latent_dim)
     # indicator of whether this is a genetic clustering or dimensionality reduction model
     doing_clustering = False
@@ -888,8 +897,7 @@ def main():
 
 
     batch_size = train_opts["batch_size"] * num_devices
-    #local_batch_size  = train_opts["batch_size"]
-    learning_rate = train_opts["learning_rate"]  * num_devices
+    learning_rate = train_opts["learning_rate"] #  * num_devices
     regularizer = train_opts["regularizer"]
 
     superpopulations_file = arguments['superpops']
@@ -914,6 +922,7 @@ def main():
 
     else:
         missing_mask_input = False
+        sparsifies = False
 
     if "impute_missing" in data_opts.keys():
         fill_missing = data_opts["impute_missing"]
@@ -967,6 +976,7 @@ def main():
         noise_std = train_opts["noise_std"]
     else:
         noise_std = False
+        noise_std = 0.0
 
     if "decode_only" in data_opts.keys():
         decode_only = data_opts["decode_only"]
@@ -1071,7 +1081,6 @@ def main():
 
         if phenofile:
             phenos = pd.read_csv(phenofile)
-            print(phenos.keys())
             pheno_data = tf.convert_to_tensor(phenos[pheno].to_numpy())
             pheno_names = tf.convert_to_tensor(phenos["line_name"])
 
@@ -1456,7 +1465,6 @@ def main():
                         num_total.append(tf.cast(0,tf.float32))
                         num_correct.append(tf.cast(0,tf.float32))
 
-
                 # Convert from lists to tensors.
                 num_correct = tf.stack(num_correct, axis=0)
                 num_total = tf.stack(num_total, axis=0)
@@ -1537,47 +1545,11 @@ def main():
                             y_pred = tf.nn.softmax(output[:,0:model.n_markers])
                             loss_value += tf.math.reduce_sum(((-y_pred) * y_true)) * 1e-6
                     for val in allvars:
-                        #maxflax = tf.math.reduce_max(tf.math.abs(val))
                         maxflax2 = tf.math.minimum(tf.math.reduce_max(tf.math.abs(val)), tf.math.reduce_max(tf.math.abs(1. - tf.math.abs(val))))
                         loss_value += tf.square(tf.math.maximum(1.0, maxflax2))
-                    #if pure or full_loss:
-                    #	loss_value = -loss_function(y_pred = output, y_true = targets, avg=True)
-
-                    #else:
-
-                    #loss_value += 1e-3*tf.reduce_sum(tf.where(poplist[:, 0] == "AD_066", tf.math.reduce_sum(tf.square(encoded_data), axis=-1), 0.))
-                    #loss_value += 1e-3*tf.reduce_sum(tf.where(poplist[:, 0] == "Zapo0097", tf.square(encoded_data[:, 1]) + tf.square(tf.minimum(0.0, encoded_data[:, 0] - 1.0)), 0.))
-                    #maxflaxloss = loss_value
-
-                #### gradients_maxflaxloss = g5.gradient(maxflaxloss, allvars)
+                    
                 gradientsavg = g5.gradient(loss_value, allvars)
-                #other_loss4 = loss_value
-                #other_loss4 = 0
-
-                #with tf.GradientTape() as g4:
-                #	output, encoded_data = model(input, targets, is_training=True, rander=[False, True])
-                #	if pure or full_loss:
-                #		loss_value = loss_function(y_pred = output, y_true = targets)
-
-                    #else:
-
-                    #loss_value += 1e-3*tf.reduce_sum(tf.where(poplist[:, 0] == "AD_066", tf.math.reduce_sum(tf.square(encoded_data), axis=-1), 0.))
-                    #loss_value += 1e-3*tf.reduce_sum(tf.where(poplist[:, 0] == "Zapo0097", tf.square(encoded_data[:, 1]) + tf.square(tf.minimum(0.0, encoded_data[:, 0] - 1.0)), 0.))
-
-                #gradientsrandx = g4.gradient(loss_value, model.trainable_variables)
-                #other_loss3 = loss_value
-                #with tf.GradientTape() as g4:
-                #	output, encoded_data = model(input, targets, is_training=True)
-                #	if pure or full_loss:
-                #		loss_value = loss_function(y_pred = output, y_true = targets, pow=2.)
-
-                    #else:
-
-                    #loss_value += 1e-3*tf.reduce_sum(tf.where(poplist[:, 0] == "AD_066", tf.math.reduce_sum(tf.square(encoded_data), axis=-1), 0.))
-                    #loss_value += 1e-3*tf.reduce_sum(tf.where(poplist[:, 0] == "Zapo0097", tf.square(encoded_data[:, 1]) + tf.square(tf.minimum(0.0, encoded_data[:, 0] - 1.0)), 0.))
-
-                #gradientssq = g4.gradient(loss_value, model.trainable_variables)
-                #other_loss3 = loss_value
+             
 
                 with tf.GradientTape() as g4:
                     output, encoded_data = model(input, targets, is_training=True)
@@ -1586,7 +1558,6 @@ def main():
                         output2, encoded_data2 = model2(input, targets, is_training=True)
                         loss_value += sum(model2.losses)
                 gradientsc = g4.gradient(loss_value, allvars)
-                #other_loss2 = loss_value
 
                 if do_two:
                     factor = 0.
@@ -1609,23 +1580,14 @@ def main():
                         * tf.math.rsqrt
                         (tf.reduce_sum((factor*encoded_data-tf.roll(encoded_data, 1, axis=0)) * (factor*encoded_data-tf.roll(encoded_data, 1, axis=0)), axis=-1) * tf.reduce_sum(
                         (factor*encoded_data2-tf.roll(encoded_data2, 2, axis=0)) * (factor*encoded_data2-tf.roll(encoded_data2, 2, axis=0))+1e-4, axis=-1))))*1e-2
-                    ##	output, encoded_data = model(input, targets, is_training=True)
-                    ##	#loss_value = loss_function(y_pred = output, y_true = targets) * (1.0 if pure or full_loss else 0.0)
-                        #loss_value += 1e-3*tf.reduce_sum(tf.where(poplist[:, 0] == "AD_066", tf.math.reduce_sum(tf.square(encoded_data), axis=-1), 0.))
-                        #loss_value += 1e-3*tf.reduce_sum(tf.where(poplist[:, 0] == "Zapo0097", tf.square(encoded_data[:, 1]) + tf.square(tf.minimum(0.0, encoded_data[:, 0] - 1.0)), 0.))
-                    ##	y_pred = output - tf.stop_gradient(tf.math.reduce_max(output, axis=-1, keepdims=True))
-                    ##	loss_value = -tf.math.reduce_mean(tf.square(y_pred - tf.roll(y_pred, 1, axis = 0)) * 1e-3)
+                    
                     gradientsb = g3.gradient(loss_value, allvars)
-                    #other_loss3 = loss_value
 
                 if phenomodel is not None:
                     with tf.GradientTape() as g6:
                         loss_value = tf.constant(0.)
                         for output, encoded_data in (model(input, targets, is_training=True, regloss=False),) + ((model2(input, targets, is_training=True, regloss=False), ) if do_two else ()):
                             phenopred, _ = phenomodel(encoded_data, is_training=True)
-                            tf.print("PRED")
-                            tf.print(phenopred)
-                            tf.print(phenotargets)
                             loss_value += tf.math.reduce_sum(tf.square(phenopred - phenotargets)) * 1e-2
 
                     gradientspheno = g6.gradient(loss_value, allvars)
@@ -1634,20 +1596,6 @@ def main():
 
                 loss_value = orig_loss
 
-                ##radients3 = []
-
-                ##loss_value += orig_loss
-
-                ##for g1, g2 in zip(gradients, gradients2):
-                ##	if g1 is None:
-                ##		g3 = g2
-                ##	elif g2 is None:
-                ##		g3 = g1
-                ##	else:
-                ##		#g3 = tf.where(tf.math.sign(g1 * g2) >= 0, g1 + g2, 0.)
-                ##		summed = g1 + g2
-                ##		g3 = tf.where(tf.math.sign(g1 * g2) >= 0, summed, tf.math.sign(summed) * tf.math.minimum(0.5 * tf.math.minimum(tf.abs(g1), tf.abs(g2)), tf.abs(summed)))
-                ##	gradients3.append(g3)
                 def combine(gradients, gradients2):
                     alphanom = tf.constant(0.)
                     alphadenom = tf.constant(1.0e-30)
@@ -1668,16 +1616,11 @@ def main():
                             gradients3.append(g1 * (1-cappedalpha) + g2 * (cappedalpha))
                     return (gradients3, alpha)
 
-                #gradients4, alpha4 = combine(gradientsrandx, gradientsrandy)
-                #alpha4 = 0
-                #gradients3, alpha4 = combine(gradients_output_loss, gradients_maxflaxloss)
+                
                 gradients3, alpha4 = combine(gradients, gradientsavg)
 
                 alpha3 = 0
-                #gradients4 = gradientsrandx
                 if do_two:
-                    #gradients4, alpha3 = combine(gradients2, gradientsb)
-                    #gradients3, alpha = combine(gradients3, gradients4)
                     pass
                 else:
                     alpha3 = 0
@@ -1694,12 +1637,6 @@ def main():
                     phenoloss, phenoalpha = (0.,0.)
                 if pure or full_loss:
                     optimizer.apply_gradients(zip(gradients3, allvars))
-                #if pure or not full_loss:
-                #	# was optimizer2
-                #	optimizer.apply_gradients(zip(gradients, model.trainable_variables))
-                #tf.print(loss_value, other_loss4, other_loss3, other_loss2, other_loss, full_loss, alpha4, alpha3, alpha2, alpha)
-                #tf.print(loss_value, other_loss4, other_loss3, other_loss2, other_loss, phenoloss, full_loss, alpha4, alpha3, alpha2, alpha, phenoalpha)
-
 
 
                 return loss_value, num_total_k_mer, num_correct_k_mer, class_conc
@@ -1707,7 +1644,7 @@ def main():
             def run_optimization(model, model2, optimizer, optimizer2, loss_function, input, targets, pure, phenomodel=None, phenotargets=None,data = None,alt_pos_coords = None, indices = None):
                 '''
                 Run one step of optimization process based on the given data, basic version.
-                    
+
 
                 :param model: a tf.keras.Model
                 :param optimizer: a tf.keras.optimizers
@@ -1716,17 +1653,14 @@ def main():
                 :param targets: target data
                 :return: value of the loss function
                 '''
-                
-        
-
 
                 with tf.GradientTape() as g:
                     output, _ = model(input, is_training=True)
                     if contrastive:
                         if alt_pos_coords ==None:
 
-                
                             loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = output[tf.shape(output)[0] // 2:, :], indices = indices)
+
                         else:
                             u = tf.random.uniform((1,))
 
@@ -1745,8 +1679,8 @@ def main():
                             cond_inds = tf.where(~tf.math.logical_or(d2 <1.5*d,d2 < 10))
                             updates = tf.cast(tf.gather_nd(tf.range(tf.shape(alt_pos_coords)[0]),cond_inds),tf.int64)
                             alt_pos_coords = tf.tensor_scatter_nd_update(alt_pos_coords, indices=cond_inds, updates=updates)
-
-                            if u<1.0:
+                            # Here we decide whether to use positives based on phenotypes  (split_lim)
+                            if u<0.0:
                                 loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = tf.gather(output[tf.shape(output)[0] // 2:, :],alt_pos_coords), indices = indices)
                             else:
                                 loss_value = loss_function(anchors = output[:tf.shape(output)[0] // 2, :], positives = output[tf.shape(output)[0] // 2:, :], indices = indices)
@@ -1757,7 +1691,8 @@ def main():
                         loss_value = loss_function(y_pred = output, y_true = targets)
 
 
-                    loss_value += tf.nn.scale_regularization_loss (tf.reduce_sum(model.losses))
+
+                    loss_value += tf.nn.scale_regularization_loss (tf.reduce_sum([tf.cast(loss, tf.float32) for loss in model.losses]))
 
                 gradients = g.gradient(loss_value, model.trainable_variables)
 
@@ -1774,7 +1709,8 @@ def main():
                 optimizer.apply_gradients(zip(gradients, model.trainable_variables))
                 return loss_value, num_total_k_mer, num_correct_k_mer, class_conc
 
-
+    class_conc_valid_tot = None
+    conc_v_k_mer = None
 
     if arguments['train']:
         try:
@@ -1801,7 +1737,7 @@ def main():
                         sparsifies  = sparsifies,
                         recombination_rate= recomb_rate,
                         generations = generations,
-                        only_recomb=True,
+                        only_recomb=False,
                         contrastive = contrastive,
                         decode_only = decode_only,
                         n_samples = n_train_samples_for_data ,
@@ -1866,7 +1802,7 @@ def main():
 
                     schedule_args["first_decay_steps"] = schedule_args["first_decay_steps"] * (1- schedule_args["t_mul"]**(1 +n_restarts)) / (1- schedule_args["t_mul"]) - schedule_args["first_decay_steps"] * (1- schedule_args["t_mul"]**(n_restarts)) / (1- schedule_args["t_mul"])
 
-                    schedule_args["first_decay_steps"]  =schedule_args["first_decay_steps"] * n_train_batches* n_train_batches
+                    schedule_args["first_decay_steps"]  =schedule_args["first_decay_steps"] * n_train_batches* n_train_batches *  num_devices**2
 
 
             lr_schedule = schedule_module(learning_rate, **schedule_args)
@@ -1895,7 +1831,6 @@ def main():
 
         chunk_size = 5 * data.batch_size
         data.encoded_things = tf.convert_to_tensor([np.tile(np.array([0,0]), (n_train_samples,1))])
-        ds = data.create_dataset_tf_record(chunk_size, "training",n_workers = num_workers) #, device_id = device_id)
 
         if _isChief() and not contrastive:
 
@@ -1907,6 +1842,10 @@ def main():
         def dataset_fn_train(input_context):
             #device_id = input_context.input_pipeline_id
             return data.create_dataset_tf_record(chunk_size, "training",n_workers = num_workers, shuffle=False) #, device_id = device_id)
+
+        def dataset_fn_train_reread(input_context):
+            #device_id = input_context.input_pipeline_id
+            return data.re_read_dataset(chunk_size, "training",n_workers = num_workers, shuffle=False) #, device_id = device_id)
 
         input_options = tf.distribute.InputOptions(
                 experimental_place_dataset_on_device = False,
@@ -1937,8 +1876,8 @@ def main():
                 pheno_model = None
 
             if contrastive:
-                optimizer = tf.optimizers.SGD(learning_rate = lr_schedule, momentum=0.9,nesterov = True) # , beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
-                #optimizer = tf.optimizers.Nadam(learning_rate = lr_schedule, beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
+                #optimizer = tf.optimizers.SGD(learning_rate = lr_schedule, momentum=0.9,nesterov = True) # , beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
+                optimizer = tf.optimizers.Adam(learning_rate = lr_schedule, beta_1=0.9, beta_2 = 0.999) # , amsgrad = True)
 
             else:
 
@@ -1948,26 +1887,19 @@ def main():
 
             optimizer2 = tf.optimizers.Adam(learning_rate = lr_schedule, beta_1=0.99, beta_2 = 0.999)
 
-            input_test, _, _,_,_ = next(ds.as_numpy_iterator())
-            _, _ = autoencoder(input_test[:,:,:], is_training = False, verbose = True)
-
-          
-
             if resume_from:
                 chief_print("\n______________________________ Resuming training from epoch {0} ______________________________".format(resume_from))
                 weights_file_prefix = "{0}/{1}/{2}".format(train_directory, "weights", resume_from)
                 chief_print("Reading weights from {0}".format(weights_file_prefix))
                 autoencoder.load_weights(weights_file_prefix)
 
-                input_test, _, _, _ ,_ = next(ds.as_numpy_iterator())
-                _, _ = autoencoder(input_test[:,:,:], is_training = False, verbose = True)
+            input_test, _, _, _ ,_ = next(ds.as_numpy_iterator())
+   
+
+            _, _ = autoencoder(input_test, is_training = True, verbose = True)
 
         if _isChief():
             tf.print(autoencoder.summary( expand_nested=True))
-
-            memory_info = tf.config.experimental.get_memory_info('GPU:0')
-            #tf.print(memory_info["current"])
-            #tf.print(memory_info["peak"])
 
         # train losses per epoch
         losses_t = []
@@ -1981,6 +1913,9 @@ def main():
         if isChief:
             if not os.path.isdir(train_directory + "/stats/"):
                 os.mkdir(train_directory + "/stats/")
+            if not os.path.isdir(train_directory+"/stats/hists/"):
+                os.mkdir(train_directory+"/stats/hists/")
+
             if not contrastive:
                 if os.path.isfile(train_directory + "/stats/baseline_concordances.csv"):
                     os.remove(train_directory + "/stats/baseline_concordances.csv")
@@ -2006,15 +1941,16 @@ def main():
             suffix = str(os.environ["SLURM_PROCID"])
         else:
             suffix = ""
-       
+
         logs = train_directory+ "/logdir/"  + datetime.now().strftime("%Y%m%d-%H%M%S") +"_"+ suffix
         samples_seen = 0
 
         profile = 0
 
-        for batch_dist_input, batch_dist_target, poplist, _ , _ in ds :
-            samples_seen += tf.shape(batch_dist_input)[0]
+        for batch_dist_input, batch_dist_target, poplist, _ , _ in dds :
 
+            samples_seen += tf.shape(strategy.experimental_local_results(batch_dist_input))[1]
+            #tf.print(tf.shape(strategy.experimental_local_results(batch_dist_input)))
 
         if "SLURM_PROCID" in os.environ:
             print(" samples seen on process " + str(os.environ["SLURM_PROCID"]) + ":  " + str(samples_seen))
@@ -2022,18 +1958,19 @@ def main():
             print("Samples seen: " + str(samples_seen))
 
 
+        if False:
+                
+            for lyr in autoencoder.layers:
+                tf.print(lyr.name)
+                if lyr.name=="dense" or lyr.name=="high_dim" or lyr.name=="encoded" or lyr.name=="locally_connected" or lyr.name == "locally_connected1d" :
+
+                    plt.figure()
+                    plt.hist(np.log(1+np.abs(np.array(tf.reshape(strategy.experimental_local_results(lyr.weights[0]), -1))))  , bins = 50)
+                    plt.savefig(f"{train_directory}/stats/hists/{lyr.name}_{0+resume_from}_abslogged.pdf")
+                    plt.close()
 
 
         for e in range(1,epochs+1):
-
-            # The dataset needs to be updated if we want to use past epoch coordinates in training, this may cause slow down, so skip it if not needed
-            # Update: Want to enable this for contrastive learning, where we want to shuffle the files that the workers read so that each worker does not always see the same samples.
-
-            need_encoded_things= 0
-
-            if need_encoded_things or data.contrastive:
-                dds = strategy.distribute_datasets_from_function(dataset_fn_train,input_options )
-
 
             if e % 100 < 50:
                 autoencoder.passthrough.assign(0.0)
@@ -2045,8 +1982,10 @@ def main():
             else:
                 autoencoder.cell_lock.assign(-5)
             if e ==2:
-                if profile : tf.profiler.experimental.start(logs)
-
+                if profile :
+                    tf.profiler.experimental.start(logs)
+                    chief_print("starting to profile")
+                    
             startTime = datetime.now()
             effective_epoch = e + resume_from
             train_loss = 0
@@ -2058,11 +1997,10 @@ def main():
 
 
             for batch_dist_input, batch_dist_target, poplist, original_genotypes, original_inds in dds:
-                #tf.print(batch_dist_input)
+               
                 pt = generatepheno2(pheno_data, pheno_names, poplist)
-         
                 if phenofile:
-                    
+
                     #TODO: fix this
                     # For each nan value, just assign randomly another samples' phenotype
                     nvec = tf.math.is_nan(pt)
@@ -2073,24 +2011,24 @@ def main():
                     nbrs = NearestNeighbors(n_neighbors=5, algorithm='ball_tree').fit(pt[:,tf.newaxis])
                     chosen_neighbour = tf.random.uniform([1],minval=1,maxval=6, dtype= tf.int32)[0]
                     alt_pos_coords = nbrs.kneighbors(pt[:,tf.newaxis])[1][:,1]
-                    
+
                     updates2 = tf.cast(tf.ones(tf.shape(iddd))* -9, tf.int64)
                     alt_pos_coords = tf.tensor_scatter_nd_update(alt_pos_coords, indices = tf.where(nvec),updates=updates2)
-                   
+
                 else:
                     alt_pos_coords = None
 
-                indd =   tf.where(original_inds[:,0,tf.newaxis] == tf.convert_to_tensor(data.ind_pop_list_train_orig[:,0]))[:,1]
 
+                indd = []
+                if e <10:
+                    train_batch_loss, num_total_k_mer,num_correct_k_mer, class_conc_temp= distributed_train_step(autoencoder, autoencoder2, optimizer, optimizer2, loss_func, batch_dist_input, batch_dist_target, False, phenomodel=pheno_model, phenotargets=pt,data=data, alt_pos_coords = alt_pos_coords, indices = indd)
 
-                train_batch_loss, num_total_k_mer,num_correct_k_mer, class_conc_temp= distributed_train_step(autoencoder, autoencoder2, optimizer, optimizer2, loss_func, batch_dist_input, batch_dist_target, False, phenomodel=pheno_model, phenotargets=pt,data=data, alt_pos_coords = alt_pos_coords, indices = indd)
+                else:
+                    train_batch_loss, num_total_k_mer,num_correct_k_mer, class_conc_temp= distributed_train_step(autoencoder, autoencoder2, optimizer, optimizer2, loss_func, batch_dist_input, batch_dist_target, False, phenomodel=pheno_model, phenotargets=pt,data=data, alt_pos_coords = alt_pos_coords, indices = indd)
+
                 conc_train_total_k_mer += num_total_k_mer
                 conc_train_correct_k_mer += num_correct_k_mer
-
-
-                #tf.print(original_inds)
-                         
-                        
+                """
                 if need_encoded_things:
                     raw_encoded_data = autoencoder(original_genotypes, encode_only=True,is_training= False)
                     if raw_encoding == None:
@@ -2098,7 +2036,7 @@ def main():
                     else:
                         raw_encoding = tf.concat([raw_encoding, raw_encoded_data], axis=0)
 
-                        data.encoded_things = raw_encoding
+                        data.encoded_things = raw_encoding"""
                 """
                 This snippet verifies that no held-out samples get passed to training
                 if holdout_val_pop is not None and num_devices == 1 and num_workers == 1 :
@@ -2113,7 +2051,7 @@ def main():
                 n_train_samples = 0
                 chief_print("Observe: only passing recombined samples, no original samples. ")
 
-            train_loss_this_epoch = train_loss /  (n_train_samples  + n_train_batches* (data.total_batch_size -data.batch_size))
+            train_loss_this_epoch = train_loss /  tf.cast((n_train_samples  + n_train_batches* (data.total_batch_size -data.batch_size)), tf.float32)
             if not contrastive:
                 train_conc_this_epoch = conc_train_correct_k_mer[0] / conc_train_total_k_mer[0]
                 train_conc_this_epoch_k_mer = conc_train_correct_k_mer / conc_train_total_k_mer
@@ -2128,25 +2066,21 @@ def main():
             losses_t.append(train_loss_this_epoch)
             conc_t.append(train_conc_this_epoch)
 
-
-            if not contrastive:
-                #chief_print(class_conc_this_epoch)
-                pass
-
-
             train_error_write = tf.concat([tf.reshape(tf.convert_to_tensor(tf.cast(effective_epoch,tf.float32)), [1, 1]), tf.reshape(train_loss_this_epoch,[1,1])],axis = 1).numpy()[0]
             if not os.path.isdir(train_directory+"/stats/"):
                 os.mkdir(train_directory+"/stats/")
+            if not os.path.isdir(train_directory+"/stats/hists/"):
+                os.mkdir(train_directory+"/stats/hists/")
 
             if isChief:
                 with open(train_directory + "/stats/training_loss.csv", 'a', newline='') as fd:
                     writer = csv.writer(fd)
                     writer.writerow([str(i) for i in train_error_write])
-                lr_write = tf.concat([tf.reshape(tf.convert_to_tensor(tf.cast(effective_epoch,tf.float32)), [1, 1]), tf.reshape(lr_schedule(optimizer.iterations),[1,1])],axis = 1).numpy()[0]
+                #lr_write = tf.concat([tf.reshape(tf.convert_to_tensor(tf.cast(effective_epoch,tf.float32)), [1, 1]), tf.reshape(lr_schedule(optimizer.iterations),[1,1])],axis = 1).numpy()[0]
 
                 with open(train_directory + "/stats/learning_rate.csv", 'a', newline='') as fd:
                     writer = csv.writer(fd)
-                    writer.writerow([str(i) for i in lr_write])
+                    #writer.writerow([str(i) for i in lr_write])
                 if not contrastive:
                     train_conc_write = tf.concat([tf.reshape(tf.convert_to_tensor(tf.cast(effective_epoch,tf.float32)), [1, 1]), tf.reshape(train_conc_this_epoch_k_mer,[1,5])],axis = 1).numpy()[0]
                     with open(train_directory + "/stats/training_k_mer_concordance.csv", 'a', newline='') as fd:
@@ -2170,15 +2104,15 @@ def main():
             chief_print("Epoch: {}/{}...".format(effective_epoch, epochs+resume_from))
             chief_print("--- Train loss: {:.4f} Concordance {:.4f} time: {}".format(train_loss_this_epoch, train_conc_this_epoch_k_mer[0,0],  train_time))
             #chief_print("Learning rate: {}".format(lr_schedule(optimizer.iterations)))
-            if n_valid_samples > 0:
+            if n_valid_samples > 0 and  e % save_interval == 0 :
 
                 startTime = datetime.now()
                 valid_loss = 0
                 conc_valid_total_k_mer = 0
                 conc_valid_correct_k_mer = 0
                 for input_valid_batch, targets_valid_batch, poplist,original_genotypes,original_inds  in dds_validation:
-                    indd =   tf.where(original_inds[:,0,tf.newaxis] == tf.convert_to_tensor(data.ind_pop_list_train_orig[:,0]))[:,1]
-
+                    #indd =   tf.where(original_inds[:,0,tf.newaxis] == tf.convert_to_tensor(data.ind_pop_list_train_orig[:,0]))[:,1]
+                    indd = []
                     valid_loss_batch, num_total_k_mer, num_correct_k_mer,class_conc_temp_valid = distributed_valid_batch(autoencoder, loss_func, input_valid_batch, targets_valid_batch,data, indd)
 
                     valid_loss += valid_loss_batch
@@ -2230,14 +2164,14 @@ def main():
                         writer = csv.writer(fd)
                         writer.writerow([str(i) for i in class_conc_write])
 
-                if e == 1:
+                if class_conc_valid_tot == None:
                     class_conc_valid_tot = tf.reshape(class_conc_valid_this_epoch,[1,3])
                 else:
                     class_conc_valid_tot = tf.concat([class_conc_valid_tot, tf.reshape(class_conc_valid_this_epoch, [1, 3])], axis=0)
 
                 losses_v.append(valid_loss_this_epoch)
                 conc_v.append(valid_conc_this_epoch)
-                if e == 1:
+                if conc_v_k_mer == None:
                     conc_v_k_mer = tf.reshape(valid_conc_this_epoch_k_mer, [1,5])
                 else:
                     conc_v_k_mer = tf.concat([conc_v_k_mer, tf.reshape(valid_conc_this_epoch_k_mer, [1,5])], axis = 0)
@@ -2249,36 +2183,78 @@ def main():
             if _isChief():
                 weights_file_prefix = train_directory + "/weights/" + str(effective_epoch)
             else:
-                #weights_file_prefix = train_directory + "/weights/temp"+ str(os.environ["SLURM_PROCID"]) +"/" + str(effective_epoch)
                 weights_file_prefix ="/scratch/local/"+ str(effective_epoch)+os.environ["SLURM_PROCID"] # Save to some junk directory, /scratch/local on Berra is a temp directory that deletes files after job is done.
             pheno_weights_file_prefix = train_directory + "/pheno_weights/" + str(effective_epoch)
-            if e % save_interval == 0:
+
+            if e % save_interval == 0 :
                 startTime = datetime.now()
                 save_weights(weights_file_prefix, autoencoder)
                 #save_weights(pheno_weights_file_prefix, pheno_model)
                 save_time = (datetime.now() - startTime).total_seconds()
                 save_epochs.append(effective_epoch)
                 chief_print("-------- Save time: {0} dir: {1}".format(save_time, weights_file_prefix))
-        if profile: tf.profiler.experimental.stop()
 
+                if isChief:
+                    max_weight = np.max(np.log(1+np.abs(np.array(tf.reshape(strategy.experimental_local_results(autoencoder.ms_variable), -1)))))
+                    median_weight = np.median(np.log(1+np.abs(np.array(tf.reshape(strategy.experimental_local_results(autoencoder.ms_variable), -1)))))
+                    plt.figure()
+                    append_to_file(path = f"{train_directory}/stats/msvar_medweights.csv", data =median_weight, epoch = tf.convert_to_tensor(tf.cast(effective_epoch,tf.float32)))
+                    append_to_file(path = f"{train_directory}/stats/msvar_maxweights.csv", data =max_weight, epoch = tf.convert_to_tensor(tf.cast(effective_epoch,tf.float32)))
+                    tmpp = pd.read_csv( f"{train_directory}/stats/msvar_maxweights.csv").to_numpy()
+                    tmppmed = pd.read_csv( f"{train_directory}/stats/msvar_medweights.csv").to_numpy()
+                    plt.plot(tmpp[:,0], tmpp[:,1],label = "max")
+                    plt.plot(tmppmed[:,0], tmppmed[:,1],label = "median")
+                    plt.legend()
+                    plt.plot(tmpp[:,0], tmpp[:,1])
+                    plt.xlabel("Epoch")
+                    plt.ylabel("max(log(1+abs(weights)))")
+                    plt.savefig(f"{train_directory}/stats/msvar_maxweights.pdf")
+                    plt.close()
+
+                    if False:
+                            
+                        for lyr in autoencoder.layers:
+                            if lyr.name=="dense" or lyr.name=="high_dim" or lyr.name=="encoded" or lyr.name=="conv1d" or lyr.name=="locally_connected" or lyr.name == "locally_connected1d":
+
+
+                                plt.figure()
+                                plt.hist(np.log(1+np.abs(np.array(tf.reshape(strategy.experimental_local_results(lyr.weights[0]), -1))))  , bins = 50)
+                                plt.savefig(f"{train_directory}/stats/hists/{lyr.name}_{effective_epoch}_abslogged.pdf")
+                                plt.close()
+                                #if lyr.name=="dense":
+                                max_weight = np.max(np.log(1+np.abs(np.array(tf.reshape(strategy.experimental_local_results(lyr.weights[0]), -1)))))
+                                median_weight = np.median(np.log(1+np.abs(np.array(tf.reshape(strategy.experimental_local_results(lyr.weights[0]), -1)))))
+                                plt.figure()
+                                append_to_file(path = f"{train_directory}/stats/{lyr.name}_medweights.csv", data =median_weight, epoch = tf.convert_to_tensor(tf.cast(effective_epoch,tf.float32)))
+                                append_to_file(path = f"{train_directory}/stats/{lyr.name}_maxweights.csv", data =max_weight, epoch = tf.convert_to_tensor(tf.cast(effective_epoch,tf.float32)))
+                                tmpp = pd.read_csv( f"{train_directory}/stats/{lyr.name}_maxweights.csv").to_numpy()
+                                tmppmed = pd.read_csv( f"{train_directory}/stats/{lyr.name}_medweights.csv").to_numpy()
+                                plt.plot(tmpp[:,0], tmpp[:,1],label = "max")
+                                plt.plot(tmppmed[:,0], tmppmed[:,1],label = "median")
+                                plt.legend()
+                                plt.plot(tmpp[:,0], tmpp[:,1])
+                                plt.xlabel("Epoch")
+                                plt.ylabel("max(log(1+abs(weights)))")
+                                plt.savefig(f"{train_directory}/stats/{lyr.name}_maxweights.pdf")
+                                plt.close()
+
+        if profile:
+            tf.profiler.experimental.stop()
+            tf.print("stopping profiling")
         if isChief:
             outfilename = train_directory + "/" + "train_times.csv"
             write_metric_per_epoch_to_csv(outfilename, train_times, train_epochs)
 
             outfilename = "{0}/losses_from_train_t.csv".format(train_directory)
-            #epochs_t_combined, losses_t_combined = write_metric_per_epoch_to_csv(outfilename, losses_t, train_epochs)
             _, ax = plt.subplots()
             loss_train =pd.read_csv(train_directory + "/stats/training_loss.csv",header = None).to_numpy()
             plt.plot(loss_train[:,0], loss_train[:,1], label="train", c="orange")
 
-            #plt.plot(epochs_t_combined, losses_t_combined, label="train", c="orange")
 
             if n_valid_samples > 0:
                 outfilename = "{0}/losses_from_train_v.csv".format(train_directory)
-                #epochs_v_combined, losses_v_combined = write_metric_per_epoch_to_csv(outfilename, losses_v, train_epochs)
 
                 loss_valid = pd.read_csv(train_directory + "/stats/validation_loss.csv", header=None).to_numpy()
-                #plt.plot(epochs_v_combined, losses_v_combined, label="valid", c="blue")
                 plt.plot(loss_valid[:,0], loss_valid[:,1], label="valid", c="blue")
 
                 min_valid_loss_epoch = loss_valid[np.argmin(loss_valid[:,1]),0]
@@ -2439,7 +2415,7 @@ def main():
         ind_pop_list_train_reference = data.ind_pop_list_train_orig[data.sample_idx_train]
 
         write_h5(encoded_data_file, "ind_pop_list_train", np.array(ind_pop_list_train_reference, dtype='S'))
-        #write_h5(high_dim_encoded_data_file, "ind_pop_list_train", np.array(ind_pop_list_train_reference, dtype='S'))
+        write_h5(high_dim_encoded_data_file, "ind_pop_list_train", np.array(ind_pop_list_train_reference, dtype='S'))
 
         n_train_samples = copy.deepcopy(data.n_train_samples)
 
@@ -2476,7 +2452,7 @@ def main():
                         normalization_options = norm_opts,
                         impute_missing = fill_missing,
                         sparsifies  = sparsifies,
-                        only_recomb = True,
+                        only_recomb = False,
                         rand_split_state = rand_split_state)
         if recomb_rate != 0:
             if recomb_rate !=1:
@@ -2537,11 +2513,14 @@ def main():
         data.batch_size = batch_size_project
         chunk_size = 5 * data.batch_size
         pheno_train = None
-     
+
 
         data.encoded_things = tf.convert_to_tensor([np.tile(np.array([0,0]), (2067,1))])
 
         ds = data.create_dataset_tf_record(chunk_size, "project",n_workers=num_workers)
+        input_test, _, _, _ ,_ = next(ds.as_numpy_iterator())
+       
+        _, _ = autoencoder(input_test, is_training = True, verbose = True)
 
         def dataset_fn_project(input_context):
 
@@ -2565,7 +2544,7 @@ def main():
 
 
         def compute_and_save_binned_conc(pred,true,name):
-            #TODO: This has an error right now that I have not had time to check. Do not use 
+            #TODO: This has an error right now that I have not had time to check. Do not use
             chief_print("WARNING: Using function \"compute_and_save_binned_conc\", this has an unfixed error and should not be used. ")
             c0 = np.sum(((pred-true==0) * (true==0)).astype(int),axis = 0) # How many are predicted correctly, and are genotype 0, per SNP
             c1 = np.sum(((pred-true==0) * (true==1)).astype(int),axis = 0) # How many are predicted correctly, and are genotype 1, per SNP
@@ -2631,13 +2610,12 @@ def main():
             encoded_train_recombined = np.empty((0, n_latent_dim))
 
             encoded_train_to_write = np.empty((0, n_latent_dim))
-            high_dim_encoding_to_write = np.empty((0, 75))
+            high_dim_encoding_to_write = np.empty((0, n_high_dim))
 
             decoded_train = None
             targets_train = np.empty((0, n_markers))
 
-            high_dim_encoding = np.empty((0, 75))
-
+            high_dim_encoding = np.empty((0, n_high_dim))
 
             loss_value_per_train_batch = []
             loss_train_batch = 0
@@ -2646,7 +2624,6 @@ def main():
             raw_encoding = None
 
             for input_train_batch, targets_train_batch, ind_pop_list_train_batch,original_genotypes, original_inds in dds:
-
                 if data.recombination_rate != 0:
                     input_train_batch = tf.concat([original_genotypes, input_train_batch], axis=0)
                     targets_train_batch = tf.concat([original_genotypes[:,:,0], targets_train_batch], axis = 0)
@@ -2661,18 +2638,21 @@ def main():
                 if data.recombination_rate != 0:
                     encoded_train = np.concatenate((encoded_train, encoded_train_batch[0:tf.cast(tf.shape(encoded_train_batch)[0]/2,tf.int32),:]), axis=0)
                     encoded_train_recombined = np.concatenate((encoded_train_recombined, encoded_train_batch[tf.cast(tf.shape(encoded_train_batch)[0]/2,tf.int32):,:]), axis=0)
-                    
-                    high_dim_encoding = np.concatenate((high_dim_encoding, high_dim[0:tf.cast(tf.shape(high_dim)[0]/2,tf.int32),:]), axis=0)
+
+                    if high_dim is not None:
+                        high_dim_encoding = np.concatenate((high_dim_encoding, high_dim[0:tf.cast(tf.shape(high_dim)[0]/2,tf.int32),:]), axis=0)
 
                 else:
                     encoded_train = np.concatenate((encoded_train, encoded_train_batch[0:tf.cast(tf.shape(encoded_train_batch)[0],tf.int32),:]), axis=0)
                     encoded_train_recombined = np.concatenate((encoded_train_recombined, encoded_train_batch[tf.cast(tf.shape(encoded_train_batch)[0],tf.int32):,:]), axis=0)
-                    high_dim_encoding = np.concatenate((high_dim_encoding, high_dim[0:tf.cast(tf.shape(high_dim)[0],tf.int32),:]), axis=0)
+                    if high_dim is not None:
+                        high_dim_encoding = np.concatenate((high_dim_encoding, high_dim[0:tf.cast(tf.shape(high_dim)[0],tf.int32),:]), axis=0)
 
                 # Since we want to plot the recombined samples, we save the original ones separately for writing to the encoded  h5 file used in evaluate.
                 # This may have to be done differently in the distributed setting
                 encoded_train_to_write = np.concatenate((encoded_train_to_write, encoded_train_batch[:-data.total_batch_size + data.batch_size,:]), axis=0)
-                high_dim_encoding_to_write = np.concatenate((high_dim_encoding_to_write, high_dim[:-data.total_batch_size + data.batch_size,:]), axis=0)
+                if high_dim is not None:
+                    high_dim_encoding_to_write = np.concatenate((high_dim_encoding_to_write, high_dim[:-data.total_batch_size + data.batch_size,:]), axis=0)
 
                 if decoded_train is None:
                     decoded_train = np.copy(decoded_train_batch[:,0:n_markers])
@@ -2699,9 +2679,11 @@ def main():
             ind_pop_list_train = poplist2[np.squeeze(pop_inds),:]
             encoded_train = np.array(encoded_train)
             encoded_train_to_write = np.array(encoded_train_to_write)
-            
-            high_dim_encoding = np.array(high_dim_encoding)
-            high_dim_encoding_to_write = np.array(high_dim_encoding_to_write)
+
+            if high_dim is not None:
+
+                high_dim_encoding = np.array(high_dim_encoding)
+                high_dim_encoding_to_write = np.array(high_dim_encoding_to_write)
 
 
             if not contrastive and False:
@@ -2742,8 +2724,8 @@ def main():
                     list_all.append(x[0])
 
             encoded_train_to_write = encoded_train[np.array(list_all)]
-            
-            high_dim_encoding_to_write = high_dim_encoding[np.array(list_all)]
+            if high_dim is not None:
+                high_dim_encoding_to_write = high_dim_encoding[np.array(list_all)]
 
 
             if isChief:
@@ -2826,17 +2808,17 @@ def main():
 
                 if pheno_train is not None:
                     writephenos(f'{results_directory}/{epoch}.phe', ind_pop_list_train, pheno_train)
-                
+
                 write_h5(encoded_data_file, "{0}_encoded_train".format(epoch), encoded_train_to_write)
-                
-                #write_h5(high_dim_encoded_data_file, "{0}_high_dim_encoding".format(epoch), high_dim_encoding_to_write)
+
+                write_h5(high_dim_encoded_data_file, "{0}_high_dim_encoding".format(epoch), high_dim_encoding_to_write)
 
 
                 markersize = 5
                 encoded_train2 = np.array(encoded_train)
 
                 plt_kde=True
-                if plt_kde and epoch ==epochs[-1]:
+                if plt_kde and epoch ==epochs[-1] and n_valid_samples != 0:
 
                     train_test_KDE_plot(outfile_prefix="{0}/dimred_by_train_test_KDEtest_e_{1}".format(results_directory, epoch_for_filename),
                                         x_train=encoded_train2[np.array(list_t), 0],
@@ -3187,6 +3169,7 @@ def main():
                     print("------------------------------------------------------------------------")
 
             write_f1_scores_to_csv(results_directory, "epoch_{0}".format(epoch), superpopulations_file, f1_scores_by_pop, coords_by_pop)
+            append_to_file(f1 = False,path = train_directory + "/f1_score_mine.csv", data = tf.convert_to_tensor(tf.cast(f1_score_avg,tf.float32)), epoch = tf.convert_to_tensor(tf.cast(epoch,tf.float32)))
 
         for m in metric_names:
 
