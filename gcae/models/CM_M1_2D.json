@@ -1,7 +1,9 @@
 {"layers":
 [ 
-  {"class": "LocallyConnected1D", "module":"tf.keras.layers", "args": {"filters": 32, "kernel_size": 3,"implementation":3}},
-  {"class": "Conv1D", "module":"tf.keras.layers", "args": {"filters":64, "kernel_size":5, "padding":"same", "activation":"elu", "strides":1}},
+  {"class": "sep_sparse_oh", "module":"utils.layers", "args": {"max_noise":0.99 ,"max_sparse": 0.99}},
+
+  {"class": "Conv1D", "module":"tf.keras.layers", "args": {"filters": 32, "kernel_size": 3,"implementation":3}},
+  {"class": "Conv1D", "module":"tf.keras.layers", "args": {"filters":64, "kernel_size":5, "padding":"same", "activation":"elu", "strides":2}},
   {"class": "BatchNormalization", "module":"tf.keras.layers", "args": {}},
   {"class": "ResidualBlock2", "module":"utils.layers", "args": {"filters":64, "kernel_size":3}},
   {"class": "Conv1D", "module":"tf.keras.layers", "args": {"filters":64, "kernel_size":3, "padding":"same", "activation":"elu"}},

@@ -1,13 +1,13 @@
 {
-  "learning_rate": 0.05,
-  "batch_size": 24,
-  "noise_std": 1,
+  "learning_rate": 0.01,
+  "batch_size": 20,
+  "noise_std": 0.001,
   "n_samples": -1,
   "loss": {
     "module": "CL",
     "class": "centroid",
     "args": {
-      "n_pairs": 10,
+      "n_pairs": 5,
       "mode": "distance_weighted_random",
       "distance": "L2"
     }
@@ -21,13 +21,13 @@
     "ord": 2,
     "flipsquare": true,
     "box_area": 40000,
-    "box_factor": 1e-0
+    "box_factor": 1e-1
   },
   "lr_scheme": {
     "module": "tf.keras.optimizers.schedules",
     "class": "CosineDecayRestarts",
     "args": {
-      "first_decay_steps": 5000,
+      "first_decay_steps": 500000,
       "m_mul": 0.99,
       "alpha": 1e-9,
       "t_mul": 1.5

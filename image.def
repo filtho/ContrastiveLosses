@@ -1,16 +1,18 @@
 Bootstrap: docker
 
-From: nvcr.io/nvidia/tensorflow:23.04-tf2-py3
+From: nvcr.io/nvidia/tensorflow:24.05-tf2-py3
 
 
 %post
-    pip install --upgrade pip
-    pip install docopt
-    pip install grpcio
-    pip install scikit-learn==1.2.2
-    pip install matplotlib==3.7.1
-    pip install seaborn==0.12.2
-    pip install scipy==1.4.1
-    pip install pandas-plink
-    pip install pyarrow==8.0.0
-    pip install pysnptools==0.5.7
+    python3.10  -m pip install --upgrade pip
+    python3.10  -m pip install docopt
+    python3.10  -m pip install grpcio
+    python3.10  -m pip install scikit-learn
+    python3.10  -m pip install matplotlib
+    python3.10  -m pip install seaborn
+    python3.10  -m pip install scipy
+    python3.10  -m pip install pandas-plink
+    python3.10  -m pip install pyarrow
+    python3.10  -m pip install pysnptools
+    python3.10  -m pip install plotly
+    python3.10  -m pip install pysnptools

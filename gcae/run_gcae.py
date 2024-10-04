@@ -29,7 +29,6 @@ Options:
 """
 
 
-import tensorflow_models as tfm
 
 from docopt import docopt, DocoptExit
 import os
