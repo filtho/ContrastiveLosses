@@ -203,6 +203,29 @@ def plot_coords_by_superpop(pop_coords_dict, outfileprefix, pop_superpop_file, s
 		sns.light_palette((210, 90, 60), num_colors_per_superpop, reverse = True, input="husl")
 	]
 
+	color_list = [
+		sns.color_palette("Greys_r", num_colors_per_superpop),
+		sns.color_palette("Greens_r", num_colors_per_superpop),
+		sns.color_palette("Oranges_r", num_colors_per_superpop),
+		sns.color_palette("PiYG", num_colors_per_superpop * 2),
+		sns.color_palette("Blues", num_colors_per_superpop),
+		sns.color_palette("PRGn", num_colors_per_superpop * 2),
+		sns.color_palette("BrBG", num_colors_per_superpop),
+		sns.color_palette("Reds", num_colors_per_superpop),
+		sns.color_palette("YlOrRd", 2 * 3),
+		sns.cubehelix_palette(num_colors_per_superpop, reverse=False),
+		sns.light_palette("purple", num_colors_per_superpop, reverse =True ),
+		sns.light_palette("navy", 5, reverse=True),
+		sns.light_palette("green",num_colors_per_superpop, reverse = True),
+		sns.light_palette((210, 90, 60), num_colors_per_superpop, reverse = True, input="husl"),
+		sns.light_palette("olive", num_colors_per_superpop * 2),
+		sns.light_palette("darkslategray", num_colors_per_superpop * 2),
+		sns.light_palette("mediumaquamarine", num_colors_per_superpop * 2),
+		sns.dark_palette("indigo", num_colors_per_superpop * 2),
+		sns.dark_palette("saddlebrown", num_colors_per_superpop * 2),
+
+	]
+
 	edge_list = ["black", "red", "white"]
 	shape_list = ["o", "v", "<", "s", "p", "H", ">", "p", "D", "X", "*", "d", "h"]
 
@@ -218,7 +241,9 @@ def plot_coords_by_superpop(pop_coords_dict, outfileprefix, pop_superpop_file, s
 
 	max_pops_per_col = max_num_pops
 
-	fig, axes = plt.subplots(figsize=(6.0 / 2.0, 1.5 * max_num_pops / 4.0))
+	#fig, axes = plt.subplots(figsize=(6.0 / 2.0, 1.5 * max_num_pops / 4.0))
+	fig, axes = plt.subplots()
+
 	plt.setp(axes.spines.values(), linewidth=0.0)
 
 	row = 0

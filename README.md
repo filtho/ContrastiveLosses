@@ -47,13 +47,13 @@ The program `run_gcae.py` is called for examples of contrastive learning on gene
 To run, the user need to state whether we want to train a model anew or to project already saved model states, among other parameters. This project is a continuation of [GenoCAE](https://github.com/kausmees/GenoCAE), see that page for a more detailed usage guide. This project shares essentially the same API.
 
 
-For example, to train a model on the dog dataset, run the following:
+For example, to train a model on the dog dataset, run the following. This is an example using all samples in training, with the first 10k SNPs, and a 2D embedding model:
 
-`$ python3.10 run_gcae.py train --trainedmodeldir=./test  --datadir=Data/dog --model_id=CM_2D_test --data=All_Pure_150k --train_opts_id=ex3_CL --data_opts_id=d_0_4_dog_cont --save_interval=5 --epochs=100`
+`$ python3 run_gcae.py train --trainedmodeldir=./test  --datadir=Data/dog --model_id=CM_2D_test --data=All_Pure_150k --train_opts_id=ex3_CL --data_opts_id=d_0_4_dog_cont --save_interval=5 --epochs=100`
 
 To plot results for saved model states in a directory, run 
 
-`$ run_gcae.py project --trainedmodeldir=./test  --datadir=Data/dog --model_id=CM_2D_test --data=All_Pure_150k --train_opts_id=ex3_CL --data_opts_id=d_0_4_dog_cont --superpops=Data/dog/dog_superpopulations`
+`$ python3 run_gcae.py project --trainedmodeldir=./test  --datadir=Data/dog --model_id=CM_2D_test --data=All_Pure_150k --train_opts_id=ex3_CL --data_opts_id=d_0_4_dog_cont --superpops=Data/dog/dog_superpopulations`
 
 
 ![Results on Dog dataset](gcae/animated.gif)
