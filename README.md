@@ -18,6 +18,10 @@ Run the image, the --nv flag exposes the NVIDIA GPU to the container:
 
 `$ apptainer run --nv image.sif`
 
+Python3.10 is installed in this container, so if you use this, you might need to explicitly run with Python version 3.10, so in the example below on genetic data, run 
+
+`$ python3.10 run_gcae.py train ... `
+
 ### Virtual environment specification
 As an alternative, the file requirements.txt contains the needed packages. Creating a python venv, and executing 
 `pip install -r requirements.txt`
