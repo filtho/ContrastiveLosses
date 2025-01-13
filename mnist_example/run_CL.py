@@ -12,7 +12,7 @@ Options:
 import os
 import time
 from docopt import docopt, DocoptExit
-
+import sys
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
 
 if "SLURM_NTASKS_PER_NODE" in os.environ:
@@ -24,6 +24,7 @@ if "SLURM_NTASKS_PER_NODE" in os.environ:
 			#If we use more than one task, we need to set devices. For more than 1 process on one node, it will otherwise try to use all gpus on all processes
 			os.environ["CUDA_VISIBLE_DEVICES"] = os.environ["SLURM_LOCALID"]
 
+sys.path.append('../')
 
 from datetime import datetime
 import csv

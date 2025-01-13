@@ -1,7 +1,7 @@
 {
     "loss": {
         "module": "CL",
-        "class": "centroid_loss",
+        "class": "centroid",
         "args": {"n_pairs":20,
                 "mode":"distance_weighted_random",
                 "distance": "L2"
