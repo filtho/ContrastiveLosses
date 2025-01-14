@@ -699,7 +699,7 @@ def save_weights2(train_directory, prefix, model):
             os.rename(train_directory, newname)
             print("... renamed " + train_directory + " to  " + newname)
 
-        model.save_weights(prefix, save_format ="tf")
+        model.save_weights(prefix+".weights.h5")
 
 def save_weights(prefix, model):
     """
@@ -709,7 +709,7 @@ def save_weights(prefix, model):
     """
     if model is None:
         return
-    model.save_weights(prefix, save_format ="tf")
+    model.save_weights(prefix+".weights.h5")
 
 
 def main():
@@ -963,6 +963,10 @@ def main():
         pass
     try:
         os.mkdir(results_directory)
+    except OSError:
+        pass
+    try:
+        os.mkdir(train_directory+"/weights")
     except OSError:
         pass
 
@@ -1886,16 +1890,16 @@ def main():
 
             optimizer2 = tf.optimizers.Adam(learning_rate = lr_schedule, beta_1=0.99, beta_2 = 0.999)
 
+            input_test, _, _, _ ,_ = next(ds.as_numpy_iterator())
+            _, _ = autoencoder(input_test, is_training = True, verbose = True)
+
             if resume_from:
                 chief_print("\n______________________________ Resuming training from epoch {0} ______________________________".format(resume_from))
                 weights_file_prefix = "{0}/{1}/{2}".format(train_directory, "weights", resume_from)
                 chief_print("Reading weights from {0}".format(weights_file_prefix))
-                autoencoder.load_weights(weights_file_prefix)
+                autoencoder.load_weights(weights_file_prefix+".weights.h5")
 
-            input_test, _, _, _ ,_ = next(ds.as_numpy_iterator())
-   
 
-            _, _ = autoencoder(input_test, is_training = True, verbose = True)
 
         if _isChief():
             tf.print(autoencoder.summary( expand_nested=True))
@@ -2598,10 +2602,10 @@ def main():
             weights_file_prefix = "{0}/{1}/{2}".format(train_directory, "weights", epoch)
             chief_print("Reading weights from {0}".format(weights_file_prefix))
 
-            autoencoder.load_weights(weights_file_prefix)
+            autoencoder.load_weights(weights_file_prefix+".weights.h5")
             if pheno_model is not None:
                 pheno_weights_file_prefix = "{0}/{1}/{2}".format(train_directory, "pheno_weights", epoch)
-                pheno_model.load_weights(pheno_weights_file_prefix)
+                pheno_model.load_weights(pheno_weights_file_prefix+".weights.h5")
 
 
             ind_pop_list_train = np.empty((0,2))

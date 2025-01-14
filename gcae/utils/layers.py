@@ -2146,9 +2146,6 @@ class sep_sparse_oh(tf.keras.layers.Layer):
 
     def call(self, inputs, training=True):
         x = inputs
-        input_data_train = 0
-        if len(tf.shape(x)) == 2:
-            x = tf.expand_dims(x, -1)
 
         if training:
             if self.recomb == False:
@@ -2157,31 +2154,19 @@ class sep_sparse_oh(tf.keras.layers.Layer):
 
             if self.recomb == True:
                 parent1 = inputs[:, :, 0]
-                # parent2 = tf.random.shuffle(inputs[:,:,0])
                 parent2 = tf.gather(inputs[:, :, 0], tf.random.shuffle(tf.range(tf.shape(inputs[:, :, 0])[0])))
-
-                # tf.print(tf.shape(tf.concat([parent1, parent2], axis = 0)))
-
-                #offspring = tf.transpose(
-                #    create_offspring_unlooped(tf.transpose(tf.concat([parent1, parent2], axis=0)), tf.shape(inputs)[1]))
-                # tf.print(tf.shape(offspring))
 
                 offspring = tf.transpose(create_offspring_unlooped_CN(tf.transpose(tf.concat([parent1, parent2], axis=0)), tf.shape(inputs)[1], gamma = self.gamma ))
 
-
-                # offspring = create_offspring_unlooped(inputs[:,:,0], tf.shape(inputs)[1])
                 offspring = tf.concat([offspring[:, :, tf.newaxis], x[:, :, tf.newaxis, 1]], axis=-1)
-                # offspring = tf.concat([offspring[:,:,tf.newaxis], tf.reshape(x[:,:,tf.newaxis,1], tf.shape(offspring[:,:,tf.newaxis])) ], axis = -1 )
-                
+
                 input_data_train = tf.concat([self.sparse_one(offspring, training), self.sparse_one(offspring, training)], axis=0)
 
         else:
             input_data_train = self.sparse_one(x, training)
 
-        # input_data_train = tf.concat([self.sparse_one(x,training), self.sparse_one(x,training)], axis = 0)
 
-        return input_data_train  ## , x, #inds, original_genotypes, original_inds
-
+        return input_data_train
 
 def create_offspring_unlooped_orig_implementation(parent_array, n_markers):
     # Using this function we create all offspring at once, instead of creating them one at a time as in a previous implementation
