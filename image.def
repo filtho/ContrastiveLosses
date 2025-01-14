@@ -5,14 +5,12 @@ From: nvcr.io/nvidia/tensorflow:24.05-tf2-py3
 
 %post
     python3.10  -m pip install --upgrade pip
-    python3.10  -m pip install docopt
-    python3.10  -m pip install grpcio
-    python3.10  -m pip install scikit-learn
-    python3.10  -m pip install matplotlib
-    python3.10  -m pip install seaborn
-    python3.10  -m pip install scipy
-    python3.10  -m pip install pandas-plink
-    python3.10  -m pip install pyarrow
-    python3.10  -m pip install pysnptools
-    python3.10  -m pip install plotly
-    python3.10  -m pip install pysnptools
+    python3.10  -m pip install docopt==0.6.2
+    python3.10  -m pip install grpcio==1.62.1
+    python3.10  -m pip install scikit-learn==1.4.2
+    python3.10  -m pip install matplotlib==3.10.0
+    python3.10  -m pip install seaborn==0.13.2
+    python3.10  -m pip install scipy==1.13.0
+    python3.10  -m pip install pandas-plink==2.3.1
+    python3.10  -m pip install pyarrow==14.0.2
+    python3.10  -m pip install pysnptools==0.5.14

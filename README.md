@@ -8,6 +8,7 @@ Implemented in TensorFlow, orginally for use in genetic data, here shown for oth
 ### Computational Environment
 This has been developed and tested only for Linux, not guaranteed to work for Windows.
 #### Singularity:
+Singularity/Apptainer is the recommeded option to get the computational environment set up correctly.
 The required packages are all included in the Apptainer definition file `image.def`.
 
 Build the Apptainer image:
@@ -22,7 +23,7 @@ Python3.10 is installed in this container, so if you use this, you might need to
 
 `$ python3.10 run_gcae.py train ... `
 
-### Virtual environment specification
+#### Virtual environment specification
 As an alternative, the file requirements.txt contains the needed packages. Creating a python venv, and executing 
 `pip install -r requirements.txt`
 will install the packages needed to run the code.
