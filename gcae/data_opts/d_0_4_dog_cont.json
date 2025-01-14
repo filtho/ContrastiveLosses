@@ -3,5 +3,5 @@
     "norm_opts" : {"flip": true, "missing_val":-1.0, "num_markers" : 10000},
     "norm_mode" : "genotypewise01",
     "impute_missing" : true,
-    "validation_split" : 0.0
+    "validation_split" : 0.2
   }

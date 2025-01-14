@@ -106,7 +106,7 @@ print(f"GPUS:")
 
 
 
-enable_mixed_precision = True
+enable_mixed_precision = False
 if enable_mixed_precision:
     my_dtype = tf.float16
 else:
@@ -1852,7 +1852,7 @@ def main():
 
         input_options = tf.distribute.InputOptions(
                 experimental_place_dataset_on_device = False,
-                experimental_fetch_to_device = True,
+                experimental_fetch_to_device = False,
                 experimental_replication_mode = tf.distribute.InputReplicationMode.PER_WORKER,
                 experimental_per_replica_buffer_size = 1)
 
