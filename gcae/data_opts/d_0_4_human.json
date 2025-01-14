@@ -1,0 +1,7 @@
+{ 
+    "sparsifies" : [0.75,0.75,0.8,0.9],
+  "norm_opts" : {"flip": false, "missing_val":-1.0, "num_markers":160858},
+  "norm_mode" : "genotypewise01",
+  "impute_missing" : true,
+  "validation_split" : 0.2
+}

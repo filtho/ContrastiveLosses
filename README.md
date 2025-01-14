@@ -62,8 +62,13 @@ To plot results for saved model states in a directory, run
 
 ![Results on Dog dataset](gcae/animated.gif)
 
+## Settings in the manuscript
+The above example model has a 2-dimensional output. The model `Contrastive3D.json` is the one used in the [preprint](https://www.biorxiv.org/content/10.1101/2024.09.30.615901v1.full.pdf) , and has a normalized 3-dimensional output.
 
-This model has a 2-dimensional output. The model "CM_3D_test9oh8nb2"is the one used in the preprint, and has a normalized 3-dimensional output.
+The dog and Human Origins in the manuscript have used the data opts files `d_0_4_dog_filtered.json` and `d_0_4_human.json`, and the train_opts files  `ex3_CL_dog3D.json` and `ex3_CL_human3D.json`, respectively.
+
+The data used is referred to their respective sources, 
+The evaluation metrics used to evaluate the embeddings and the plots found in the manuscript are found in `evaluation_scripts/embedding_evaluations.py`. The t-SNE and UMAP embeddings are created with calls from the file `evaluation_scripts/umap_and_tsne.py`
 
 ## Some notes:
 
@@ -71,39 +76,6 @@ Depending on the hardware setup, some minor changes may need to be made for the 
 `tf.config.experimental.set_virtual_device_configuration(gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3500)])`
 a VRAM of 3.5GB should be enough to run the example with the current settings. On my machine, one training epoch takes ~25 seconds for the full dataset, which has been run for the above example.
 
-
-# Examples for image data
-## Command line interface
-The program `run_CL.py` is called for all implemented examples, at the time of writing MNIST and Cifar10.
-
-To run, the user need to state whether we want to train a model anew or to plot already saved model states, which dataset to run, and where to save the logs.
-For example, to train a model on the MNIST dataset, execute the following:
-
-`$ python3 -u run_CL.py train --data=mnist --dir=./test_mnist`
-
-There is also an optional argument to restart training from a previously saved state, by appending the `--load_path=/path_to_saved_model` argument.
-
-To plot results for saved model states in a directory and evaluate the KNN-classification accuracy, run 
-
-`$ python3 -u run_CL.py plot --data=mnist --dir=./test_mnist`
-Currently, this also runs PCA and t-SNE to compare with. Note that t-SNE may be relatively slow to run.
-
-
-
-### Examples
-#### MNIST
-Within the singularity container running the example of contrastive learning on the MNIST dataset as described above for approximately 400 epochs, generates the following output: ![Results on Mnist](example_figures/mnist_example.jpg)
-
-
-#### Fashion-MNIST
-
-A similar dataset in size, but with clothing items instead is the Fashion-MNIST dataset. 
-
-`$ python3 -u run_CL.py train --data=fashion_mnist --dir=./test_fashion_mnist`
-The code yields the following results:
-
-
-![Results on Fashion-MNIST](example_figures/fashion_mnist_example.png)
 
 
 
