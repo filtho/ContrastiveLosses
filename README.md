@@ -68,8 +68,12 @@ The above example model has a 2-dimensional output. The model `Contrastive3D.jso
 
 The dog and Human Origins in the manuscript have used the data opts files `d_0_4_dog_filtered.json` and `d_0_4_human.json`, and the train_opts files  `ex3_CL_dog3D.json` and `ex3_CL_human3D.json`, respectively.
 
-The data used is referred to their respective sources, 
+The data used is referred to their respective sources, urls available in the manuscript. 
 The evaluation metrics used to evaluate the embeddings and the plots found in the manuscript are found in `evaluation_scripts/embedding_evaluations.py`. The t-SNE and UMAP embeddings are created with calls from the file `evaluation_scripts/umap_and_tsne.py`
+
+The two files have some hardcoded filepaths to data and label information and __will not run as-is__. They are mainly uploaded to show how the UMAP and t-SNE calls look that produced the embeddings, and to show the implementations of the metrics presented in the manuscript, as well as how the plots were produced. Since the runtime for the larger datasets in the paper are relatively long, the embeddings used in the manuscript are also uploaded, and can be found in `evaluation_scripts/manuscript_embeddings`.
+
+
 
 ## Some notes:
 

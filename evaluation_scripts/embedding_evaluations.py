@@ -810,6 +810,17 @@ def global_rank_score(reference_distance_matrix, embedding_distance_matrix, pop_
         score_embedding.append(np.array(scipy.stats.kendalltau(ranking_reference, ranking_embedding)[0]))
     return np.array(score_embedding)
 
+def rank_RMSE(reference_neighbors_human, embedding, kmax = 100, step = 2 ):
+
+    d_embedding = distance_matrix(embedding,embedding)
+    nbrs2 = NearestNeighbors(n_neighbors=2067, algorithm='ball_tree').fit(d_embedding)
+    distances2, indices_embedding = nbrs2.kneighbors(d_embedding)
+    score = []
+    for i in range(1,kmax,step):
+        test = np.sqrt(np.mean( (i -  np.where(reference_neighbors_human[:,i,np.newaxis]  -  indices_embedding == 0)[1] ) **2 ))
+        score.append(test)
+    return score
+
 nine_labels = np.zeros(len(spops_human))
 nine_labels[train_inds_human ] = 0
 l = len(valid_inds_human)
@@ -857,33 +868,33 @@ _, reference_neighbors_human = nbrs.kneighbors(reference_distance_human)
 
 # Load in Neural network results, contrastive and popvae for both human and dog :
 # dog:
-coords_contrastive = read_h5("saved_files/centroid_dog.h5", f"{5000}_encoded_train")
+coords_contrastive = np.load("evaluation_scripts/manuscript_embeddings/centroid_dog.npy")
 encoded_train_mapped = find_angle(coords_contrastive,fam[:,0],k = 20) # k = 20 used in paper
-coords_popvae = pd.read_csv("saved_files/popvae_dog.txt", delimiter = "\t").to_numpy()[:,:2].astype(float)
-coords_triplet = read_h5("saved_files/triplet_dog.h5", f"{5000}_encoded_train")
+coords_popvae = pd.read_csv("manuscript_embeddings/popvae_dog.txt", delimiter = "\t").to_numpy()[:,:2].astype(float)
+coords_triplet = np.load("manuscript_embeddings/triplet_dog.npy")
 triplet_mapped = find_angle(coords_triplet,fam[:,0],k = 20) # k = 20 used in paper
 
 
 # Human
 
-coords_contrastive_human = read_h5("saved_files/centroid_human.h5", f"{5000}_encoded_train")
+coords_contrastive_human = np.load("evaluation_scripts/manuscript_embeddings/centroid_human.npy")
 encoded_train_mapped_human = find_angle(coords_contrastive_human,fam_human[:,0],k = 20) # k = 20 used in paper
 
 
-coords_contrastive_human_valmiss = read_h5("saved_files/centroid_human_masked.h5", f"{5000}_encoded_train")
+coords_contrastive_human_valmiss = np.load("evaluation_scripts/manuscript_embeddings/centroid_human_valmiss.npy")
 encoded_train_mapped_human_valmiss = find_angle(coords_contrastive_human_valmiss,fam_human[:,0],k = 30) # k = 20 used in paper
 
-coords_popvae_human = pd.read_csv("saved_files/popvae_human.txt", delimiter = "\t").to_numpy()[:,:2].astype(float)
-coords_popvae_human_valmiss = pd.read_csv("saved_files/popvae_human_masked.txt", delimiter = "\t").to_numpy()[:,:2].astype(float)
+coords_popvae_human = pd.read_csv("evaluation_scripts/manuscript_embeddings/popvae_human.txt", delimiter = "\t").to_numpy()[:,:2].astype(float)
+coords_popvae_human_valmiss = pd.read_csv("evaluation_scripts/manuscript_embeddings/popvae_human_masked.txt", delimiter = "\t").to_numpy()[:,:2].astype(float)
 
 
 
 #  PCA preprocessing results dog
-umap_dog3 = np.load("saved_files/umap_tsne_pca/umap_dog3.npy")
-umap_dog30 = np.load("saved_files/umap_tsne_pca/umap_dog30.npy")
-tsne_dog3 = np.load("saved_files/umap_tsne_pca/tsne_dog3.npy")
-tsne_dog30 = np.load("saved_files/umap_tsne_pca/tsne_dog30.npy")
-pca_dog = np.load("saved_files/PCA_dog.npy")
+umap_dog3 = np.load("evaluation_scripts/manuscript_embeddings/umap_tsne_pca/umap_dog3.npy")
+umap_dog30 = np.load("evaluation_scripts/manuscript_embeddings/umap_tsne_pca/umap_dog30.npy")
+tsne_dog3 = np.load("evaluation_scripts/manuscript_embeddings/umap_tsne_pca/tsne_dog3.npy")
+tsne_dog30 = np.load("evaluation_scripts/manuscript_embeddings/umap_tsne_pca/tsne_dog30.npy")
+pca_dog = np.load("evaluation_scripts/manuscript_embeddings/PCA_dog.npy")
 
 # Compute all evaluation metrics for the given embeddings
 coord_dict = {"Centroid":coords_contrastive,
@@ -908,11 +919,11 @@ for crd in coord_dict:
 
 # PCA HUMAN Masked
 
-tsne3_human_valmiss = np.load(f"saved_files/umap_tsne_pca/tsne_human_valmiss{3}.npy")
-tsne30_human_valmiss = np.load(f"saved_files/umap_tsne_pca/tsne_human_valmiss{30}.npy")
-umapped_human_3_valmiss = np.load(f"saved_files/umap_tsne_pca/umap_human_valmiss{3}.npy")
-umapped_human_30_valmiss = np.load(f"saved_files/umap_tsne_pca/umap_human_valmiss{30}.npy")
-PCA_human_masked = np.load("saved_files/PCA_human_masked.npy")
+tsne3_human_valmiss = np.load(f"evaluation_scripts/manuscript_embeddings/umap_tsne_pca/tsne_human_valmiss{3}.npy")
+tsne30_human_valmiss = np.load(f"evaluation_scripts/manuscript_embeddings/umap_tsne_pca/tsne_human_valmiss{30}.npy")
+umapped_human_3_valmiss = np.load(f"evaluation_scripts/manuscript_embeddings/umap_tsne_pca/umap_human_valmiss{3}.npy")
+umapped_human_30_valmiss = np.load(f"evaluation_scripts/manuscript_embeddings/umap_tsne_pca/umap_human_valmiss{30}.npy")
+PCA_human_masked = np.load("evaluation_scripts/manuscript_embeddings/PCA_human_masked.npy")
 
 coord_dict_human = {
             "Centroid":coords_contrastive_human_valmiss,
@@ -936,11 +947,11 @@ for crd in coord_dict_human:
 
 
 # PCA DATA FOR UMAP AND TSNE
-tsne3_human = np.load(f"saved_files/umap_tsne_pca/tsne_human{3}.npy")
-tsne30_human= np.load(f"saved_files/umap_tsne_pca/tsne_human{30}.npy")
-umapped_human_3 = np.load(f"saved_files/umap_tsne_pca/umap_human{3}.npy")
-umapped_human_30= np.load(f"saved_files/umap_tsne_pca/umap_human{30}.npy")
-PCA_human = np.load("saved_files/PCA_human.npy")
+tsne3_human = np.load(f"evaluation_scripts/manuscript_embeddings/umap_tsne_pca/tsne_human{3}.npy")
+tsne30_human= np.load(f"evaluation_scripts/manuscript_embeddings/umap_tsne_pca/tsne_human{30}.npy")
+umapped_human_3 = np.load(f"evaluation_scripts/manuscript_embeddings/umap_tsne_pca/umap_human{3}.npy")
+umapped_human_30= np.load(f"evaluation_scripts/manuscript_embeddings/umap_tsne_pca/umap_human{30}.npy")
+PCA_human = np.load("evaluation_scripts/manuscript_embeddings/PCA_human.npy")
 
 coord_dict_human = {
             "Centroid":coords_contrastive_human,
@@ -958,13 +969,13 @@ for crd in coord_dict_human:
     r_dict = get_eval_metrics(fam_human[:,0], spops_human, coord_dict_human[crd], reference_neighbors_human, train_inds_human, valid_inds_human, k_vec_ = [3], fixed_k_ = 30)
     results_dict_human[crd] = r_dict
 
-with open('saved_files/result_dicts/results_dict_human_PCA.pickle', 'wb') as handle:
-    pickle.dump(results_dict_human, handle, protocol=pickle.HIGHEST_PROTOCOL)
+#with open('saved_files/result_dicts/results_dict_human_PCA.pickle', 'wb') as handle:
+#    pickle.dump(results_dict_human, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-results_dict_human_valmiss = pickle.load(open(f'saved_files/result_dicts/results_dict_human_masked_PCA.pickle', 'rb'))
-results_dict_human = pickle.load(open(f'saved_files/result_dicts/results_dict_human_PCA.pickle', 'rb'))
-results_dict_dog = pickle.load(open(f'saved_files/result_dicts/results_dict_dog_PCA.pickle', 'rb'))
+#results_dict_human_masked = pickle.load(open(f'saved_files/result_dicts/results_dict_human_masked_PCA.pickle', 'rb'))
+#results_dict_human = pickle.load(open(f'saved_files/result_dicts/results_dict_human_PCA.pickle', 'rb'))
+#results_dict_dog = pickle.load(open(f'saved_files/result_dicts/results_dict_dog_PCA.pickle', 'rb'))
 
 
 # Print the table for the manuscript (TABLE 2).
@@ -1002,7 +1013,7 @@ files = ['0_0.h5', '0_05.h5', '0_099.h5', '05_0.h5', '05_05.h5', '05_099.h5',
        '099_0.h5', '099_05.h5', '099_099.h5']
 score = []
 for i in files:
-    coords_M1 = read_h5("saved_files/aug_abl/"+ i, f"{5000}_encoded_train")
+    coords_M1 = read_h5("evaluation_scripts/manuscript_embeddings/aug_abl/"+ i, f"{5000}_encoded_train")
     knn_score = knn_f1_tt(spops, coords_M1, train_inds, valid_inds, [3], verbose = False)[-1]
     score.append(knn_score)
 
@@ -1114,6 +1125,41 @@ plt.savefig("saved_files/plots/Human_embeddings.pdf")
 plt.show()
 
 
+### Figure 10
+
+
+score_cont = rank_RMSE(reference_neighbors_human, coords_contrastive_human)
+score_cont2 = rank_RMSE(reference_neighbors_human, encoded_train_mapped_human)
+score_popvae = rank_RMSE(reference_neighbors_human, coords_popvae_human)
+score_tsne30 = rank_RMSE(reference_neighbors_human, tsne30_human)
+score_tsne3 = rank_RMSE(reference_neighbors_human, tsne3_human)
+score_umap3 = rank_RMSE(reference_neighbors_human, umapped_human_3)
+score_umap30 = rank_RMSE(reference_neighbors_human, umapped_human_30)
+score_pca = rank_RMSE(reference_neighbors_human, PCA_human)
+
+clist = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd','#9467bd',  '#8c564b','#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+stylelist = ["-","-","-","-","-","--","-","--"]
+
+lw =0.5
+
+plt.figure(figsize = (6,3))
+#plt.plot(k_vec,score_unfiltered,color = 'k', linestyle = stylelist[0],label = "Unfiltered", linewidth =lw )
+#plt.plot(k_vec,score_unfiltered_ordered2,color = 'k', linestyle = stylelist[0],label = "Unfiltered", linewidth =lw )
+plt.plot(k_vec,score_cont,color = clist[0],linestyle = stylelist[0],label = "centroid", linewidth =lw )
+plt.plot(k_vec,score_cont2,color = clist[0],linestyle = stylelist[0],label = "centroid", linewidth =lw )
+plt.plot(k_vec,score_popvae,color = clist[2],linestyle = stylelist[2],label = "popvae", linewidth =lw )
+plt.plot(k_vec,score_pca,color = clist[3], linestyle = stylelist[3],label = "PCA", linewidth =lw )
+plt.plot(k_vec,score_tsne3,color = clist[4], linestyle = stylelist[4],label = "t-SNE 3", linewidth =lw )
+plt.plot(k_vec,score_tsne30,color = clist[5],linestyle = stylelist[5],label = "t-SNE 30", linewidth =lw )
+plt.plot(k_vec,score_umap3,color = clist[6], linestyle = stylelist[6],label = "UMAP 3", linewidth =lw )
+plt.plot(k_vec,score_umap30,color = clist[7],linestyle = stylelist[7],label = "UMAP 30", linewidth =lw )
+plt.legend()
+plt.xlabel("Genotype distance rank", fontsize = 10)
+plt.ylabel("RMSE of embedding rank ", fontsize = 10)
+plt.savefig("saved_files/plots/RMSE_test_fixed.pdf")
+plt.show()
+
+
 
 
 
@@ -1151,9 +1197,6 @@ print(f"UMAP 2D & 3 & {g_ump2d_3[0]:.4f} &  {ump2d_3[0]:.4f} & {ump2d_3[1]:.4f} 
 print(f"UMAP 2D & 30 &  {g_ump2d_30[0]:.4f} &  {ump2d_30[0]:.4f} & {ump2d_30[1]:.4f}  \\\ ")
 print(f"UMAP Spherical &3 &  {g_ump3d_3[0]:.4f} &  {ump3d_3[0]:.4f} & {ump3d_3[1]:.4f}   \\\ ")
 print(f"UMAP Spherical & 30 &  {g_ump3d_30[0]:.4f} &  {ump3d_30[0]:.4f} & {ump3d_30[1]:.4f}     \\\ ")
-#print(f"Centroid & - &  {g_cnt[0]:.4f} &  {cnt3d[0]:.4f} & {cnt3d[1]:.4f}   \\\ ")
-#print(f"Centroid &  - & \\textbf{0.5709 }&  \\textbf{0.4614} & \\textbf{0.9130} & \\textbf{0.9294 }\\\ ")
-
 print("\hline\\")
 print("\end{tabularx}")
 
@@ -1201,7 +1244,7 @@ pca3.fit(geno_data_normed[:,train_inds].T)
 X_PCA3 = pca3.transform(geno_data_normed.T)
 
 # TEST t-SNE 3d PLOT
-tsne_dog_3D = np.load("saved_files/umap_tsne_pca/tsne_emb3d.npy") # 30 perplexity
+tsne_dog_3D = np.load("manuscript_embeddings/umap_tsne_pca/tsne_emb3d.npy") # 30 perplexity
 
 tsne3normed = tsne_dog_3D / np.sqrt(np.sum(tsne_dog_3D**2, axis = 1, keepdims=True))
 pca3normed = X_PCA3 / np.sqrt(np.sum(X_PCA3**2, axis = 1, keepdims=True))
@@ -1253,7 +1296,7 @@ print("\end{tabularx}")
 
 #
 
-dd_unfiltered = np.load("saved_files/distance_human_unfiltered.npy")
+dd_unfiltered = np.load("saved_files/distance_human_unfiltered_ordered.npy")
 dd_filtered = np.load("saved_files/distance_human.npy")
 
 centroid_L = local_adherence(reference_neighbors_human, coords_contrastive_human, kmax = 200, step = 1 )
@@ -1297,65 +1340,4 @@ plt.savefig("saved_files/plots/unfiltered_local_score.pdf")
 plt.show()
 
 
-### TEST_NEW
 
-
-dd_unfiltered = np.load("saved_files/distance_human_unfiltered.npy")
-dd_filtered = np.load("saved_files/distance_human.npy")
-embedding = coords_contrastive_human
-
-def tester(reference_neighbors_human, embedding, kmax = 100, step = 2 ):
-
-    d_embedding = distance_matrix(embedding,embedding)
-    nbrs2 = NearestNeighbors(n_neighbors=2067, algorithm='ball_tree').fit(d_embedding)
-    distances2, indices_embedding = nbrs2.kneighbors(d_embedding)
-
-    score = []
-    for i in range(1,kmax,step):
-        #test = np.var(np.where(reference_neighbors_human[:,i,np.newaxis]  -  indices_embedding == 0)[1])
-        test = np.sqrt(np.mean( (i -  np.where(reference_neighbors_human[:,i,np.newaxis]  -  indices_embedding == 0)[1] ) **2 ))
-        score.append(test)
-    return score
-
-score_cont = tester(reference_neighbors_human, coords_contrastive_human)
-score_popvae = tester(reference_neighbors_human, coords_popvae_human)
-score_tsne30 = tester(reference_neighbors_human, tsne30_human)
-score_tsne3 = tester(reference_neighbors_human, tsne3_human)
-score_umap3 = tester(reference_neighbors_human, umapped_human_3)
-score_umap30 = tester(reference_neighbors_human, umapped_human_30)
-score_pca = tester(reference_neighbors_human, PCA_human)
-
-# Unfiltered dataset
-nbrs2 = NearestNeighbors(n_neighbors=2067, algorithm='ball_tree').fit(dd_unfiltered)
-distances2, indices_embedding = nbrs2.kneighbors(dd_unfiltered)
-score_embedding = []
-k_vec = []
-score = []
-for i in range(1,100,2):
-    k_vec.append(i)
-    #test = np.var(np.where(reference_neighbors_human[:,i,np.newaxis]  -  indices_embedding == 0)[1])
-    test = np.sqrt(np.mean((i - np.where(reference_neighbors_human[:, i, np.newaxis] - indices_embedding == 0)[1]) ** 2))
-
-    score.append(test)
-
-
-
-plt.figure()
-plt.plot(k_vec,score, label = "Unfiltered")
-plt.plot(k_vec,score_cont, label = "centroid")
-plt.plot(k_vec,score_popvae, label = "popvae")
-plt.plot(k_vec,score_tsne30, label = "tsne30")
-plt.plot(k_vec,score_tsne3, label = "tsne3")
-plt.plot(k_vec,score_umap3, label = "umap3")
-plt.plot(k_vec,score_umap30, label = "umap30")
-plt.plot(k_vec,score_pca, label = "pca")
-plt.legend()
-#plt.title("The variance of  ranking of the nth closest neighbor")
-plt.title("The RMSE of ranking of the nth closest neighbor")
-plt.xlabel("Number of neighbors n")
-plt.ylabel("RMSE of embedding Rank ")
-
-plt.savefig("saved_files/plots/RMSE_test.pdf")
-plt.show()
-
-#for i in range()

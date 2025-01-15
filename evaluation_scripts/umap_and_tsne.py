@@ -526,34 +526,34 @@ np.save("saved_files/distance_human", dd)
 fam_unfiltered = pd.read_csv("/home/filip/Downloads/NearEastPublic/test.fam", header = None, delimiter = " ").to_numpy()
 bim_unfiltered = pd.read_csv("/home/filip/Downloads/NearEastPublic/test.bim", header = None, delimiter = "\t").to_numpy()
 test_bed = Bed("/home/filip/Downloads/NearEastPublic/test.bed").read().val
-testi = [np.where(i == fam_unfiltered[:,1])[0][0] for i in fam_human[:,1]]
 
-fam_unfiltered2 = fam_unfiltered[testi,:]
+ordering = [np.where(i == fam_unfiltered[:,1])[0][0] for i in fam_human[:,1]]
+test_bed_ordered = test_bed[ordering,:]
 
 
-dd = np.zeros([test_bed.shape[1],test_bed.shape[1]])
-for i in range(test_bed.shape[1]):
-    for j in range(i,test_bed.shape[1]):
-        diff = np.abs(test_bed[:, i] - test_bed[:, j])
+test_bed_ordered[np.isnan(test_bed_ordered)] = 9
+test_bed_ordered = test_bed_ordered.astype(np.int8)
+mcg = scipy.stats.mode(test_bed_ordered,axis = 1)
+idx = np.where(test_bed_ordered == 9 )
+test_bed_ordered[idx] = mcg.mode[idx[0]]#[:,0]
+test_bed_ordered = test_bed_ordered.T
+
+dd = np.zeros([test_bed_ordered.shape[1],test_bed_ordered.shape[1]])
+for i in range(test_bed_ordered.shape[1]):
+    for j in range(i,test_bed_ordered.shape[1]):
+        diff = np.abs(test_bed_ordered[:, i] - test_bed_ordered[:, j])
         dd[i,j] = np.sum(diff)
     print(i)
+dd = dd+dd.T
 
-#np.save("saved_files/distance_human_unfiltered", dd)
+np.save("saved_files/distance_human_unfiltered_ordered", dd)
 
 
-test_bed[np.isnan(test_bed)] = 9
-test_bed = test_bed.astype(np.int8)
-mcg = scipy.stats.mode(test_bed,axis = 1)
-idx = np.where(test_bed == 9 )
-test_bed[idx] = mcg.mode[idx[0]]#[:,0]
-test_bed = test_bed.T
-
-test_bed_normed  = (test_bed - np.mean(test_bed[:,train_inds_human], axis = 1, keepdims = True)) / np.std(test_bed[:,train_inds_human], axis = 1, keepdims = True)
+test_bed_normed  = (test_bed_ordered - np.mean(test_bed_ordered[:,train_inds_human], axis = 1, keepdims = True)) / np.std(test_bed_ordered[:,train_inds_human], axis = 1, keepdims = True)
 
 pca = PCA(n_components=2)
 pca.fit(test_bed_normed[:,train_inds_human].T)
 X_PCA_test = pca.transform(test_bed_normed.T)
-X_PCA_test = X_PCA_test[testi, :]
 np.save("saved_files/PCA_unfiltered_human.npy", X_PCA_test)
 
 plotly_plot(spops_human, X_PCA_test)
@@ -582,3 +582,5 @@ global_spop(fam_human[:,0], spops_human, PCA_human)[0]
 
 plotly_plot(spops_human, X_PCA_test)
 plotly_plot(spops_human, PCA_human)
+
+
