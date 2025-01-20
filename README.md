@@ -63,15 +63,17 @@ To plot results for saved model states in a directory, run
 
 ![Results on Dog dataset](gcae/animated.gif)
 
-## Settings in the manuscript
+## Settings in the manuscript _Dimensionality Reduction of Genetic Data using Contrastive Learning_
 The above example model has a 2-dimensional output. The model `Contrastive3D.json` is the one used in the [preprint](https://www.biorxiv.org/content/10.1101/2024.09.30.615901v1.full.pdf) , and has a normalized 3-dimensional output.
 
 The dog and Human Origins in the manuscript have used the data opts files `d_0_4_dog_filtered.json` and `d_0_4_human.json`, and the train_opts files  `ex3_CL_dog3D.json` and `ex3_CL_human3D.json`, respectively.
 
-The data used is referred to their respective sources, urls available in the manuscript. 
+The data used is referred to their respective sources, the urls to the datasets are available in the manuscript. 
 The evaluation metrics used to evaluate the embeddings and the plots found in the manuscript are found in `evaluation_scripts/embedding_evaluations.py`. The t-SNE and UMAP embeddings are created with calls from the file `evaluation_scripts/umap_and_tsne.py`
 
 The two files have some hardcoded filepaths to data and label information and __will not run as-is__. They are mainly uploaded to show how the UMAP and t-SNE calls look that produced the embeddings, and to show the implementations of the metrics presented in the manuscript, as well as how the plots were produced. Since the runtime for the larger datasets in the paper are relatively long, the embeddings used in the manuscript are also uploaded, and can be found in `evaluation_scripts/manuscript_embeddings`.
+
+We are open to collaboration, and if you need help in getting started to use this on your own data, please do not hesitate to get in touch. There are many hyperparameters which may need to be tuned.
 
 
 
@@ -79,7 +81,7 @@ The two files have some hardcoded filepaths to data and label information and __
 
 Depending on the hardware setup, some minor changes may need to be made for the code to run. One issue could be the GPU running out of memory. Reducing the batch size in the train_opts file could be one fix, another would be to use less variants, toggled in the data_opts file. For my current hardware setup, I had to explicitly allocate more memory than tensorflow automatically did. This can be done by adding the line 
 `tf.config.experimental.set_virtual_device_configuration(gpus[0], [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=3500)])`
-a VRAM of 3.5GB should be enough to run the example with the current settings. On my machine, one training epoch takes ~25 seconds for the full dataset, which has been run for the above example.
+a VRAM of 3.5GB should be enough to run the example with the current settings. On my machine, one training epoch takes ~25 seconds for the full dataset, which has been run for the above example, but this depends heavily on the setting used, specifically the batch size.
 
 
 
