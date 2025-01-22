@@ -64,7 +64,7 @@ To plot results for saved model states in a directory, run
 ![Results on Dog dataset](gcae/animated.gif)
 
 ## Settings in the manuscript _Dimensionality Reduction of Genetic Data using Contrastive Learning_
-The above example model has a 2-dimensional output. The model `Contrastive3D.json` is the one used in the [preprint](https://www.biorxiv.org/content/10.1101/2024.09.30.615901v1.full.pdf) , and has a normalized 3-dimensional output.
+The above example model has a 2-dimensional output. The model `Contrastive3D.json` is the one used in the [preprint](https://www.biorxiv.org/content/10.1101/2024.09.30.615901v2) , and has a normalized 3-dimensional output.
 
 The dog and Human Origins in the manuscript have used the data opts files `d_0_4_dog_filtered.json` and `d_0_4_human.json`, and the train_opts files  `ex3_CL_dog3D.json` and `ex3_CL_human3D.json`, respectively.
 
